@@ -1,0 +1,99 @@
+name: build
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Test
+        run: dotnet test KanamiReporter.sln -c Release
+
+      - name: Publish self-contained application
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          if ($version -eq $env:GITHUB_REF_NAME -and -not $env:GITHUB_REF_NAME.StartsWith('v')) { $version = '1.0.0-ci' }
+          dotnet publish src/KanamiReporter.App/KanamiReporter.App.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            -p:Version=$version `
+            -o artifacts/publish/win-x64
+
+      - name: Create portable archive
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          if ($version -eq $env:GITHUB_REF_NAME -and -not $env:GITHUB_REF_NAME.StartsWith('v')) { $version = '1.0.0-ci' }
+          New-Item -ItemType Directory -Force -Path artifacts/release | Out-Null
+          Compress-Archive -Path artifacts/publish/win-x64/* -DestinationPath "artifacts/release/KanamiReporter-$version-x64.zip" -CompressionLevel Optimal
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --yes --no-progress
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v', '' 
+          if ($version -eq $env:GITHUB_REF_NAME -and -not $env:GITHUB_REF_NAME.StartsWith('v')) { $version = '1.0.0-ci' }
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
+            "/DMyAppVersion=$version" `
+            "/DSourceDir=$PWD/artifacts/publish/win-x64" `
+            "/DOutputDir=$PWD/artifacts/release" `
+            "installer/KanamiReporter.iss"
+
+      - name: Generate update manifest
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.Substring(1)
+          ./scripts/New-UpdateManifest.ps1 `
+            -Version $version `
+            -InstallerPath "artifacts/release/KanamiReporter-Setup-x64-$version.exe" `
+            -OutputPath "artifacts/release/update.json"
+
+      - name: Generate checksums
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          if ($version -eq $env:GITHUB_REF_NAME -and -not $env:GITHUB_REF_NAME.StartsWith('v')) { $version = '1.0.0-ci' }
+          $files = @(
+            "artifacts/release/KanamiReporter-$version-x64.zip",
+            "artifacts/release/KanamiReporter-Setup-x64-$version.exe"
+          )
+          if (Test-Path "artifacts/release/update.json") { $files += "artifacts/release/update.json" }
+          $files | ForEach-Object {
+            $hash = (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash
+            "$hash  $(Split-Path -Leaf $_)"
+          } | Set-Content -LiteralPath artifacts/release/SHA256SUMS.txt -Encoding utf8
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KanamiReporter-windows-x64
+          path: artifacts/release/*
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/release/KanamiReporter-*-x64.zip
+            artifacts/release/KanamiReporter-Setup-x64-*.exe
+            artifacts/release/SHA256SUMS.txt
+            artifacts/release/update.json
+          generate_release_notes: true
+
+

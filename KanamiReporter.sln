@@ -1,0 +1,66 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{B13656FE-747A-4260-B18A-1B40C4DE143D}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KanamiReporter.Core", "src\KanamiReporter.Core\KanamiReporter.Core.csproj", "{78E431A9-DF33-4A04-8BBF-55B3275F9F6E}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KanamiReporter.Windows", "src\KanamiReporter.Windows\KanamiReporter.Windows.csproj", "{6B8757D8-3CA6-47FB-994D-BC7E120CBCDC}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KanamiReporter.App", "src\KanamiReporter.App\KanamiReporter.App.csproj", "{21E8698E-45E5-40E5-B13D-F7BA58797192}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{69DD8C33-680B-485A-8652-D0BDE7585DDC}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KanamiReporter.Core.Tests", "tests\KanamiReporter.Core.Tests\KanamiReporter.Core.Tests.csproj", "{E1873AD3-1F2E-4E61-A4CE-88C250CF92E1}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tools", "tools", "{013E2CF9-784B-41E5-9C65-7D7A4A7444CE}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KanamiReporter.CaptureProbe", "tools\KanamiReporter.CaptureProbe\KanamiReporter.CaptureProbe.csproj", "{5D2E0081-453A-4FAF-AD52-17597F53C211}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KanamiReporter.Windows.Tests", "tests\KanamiReporter.Windows.Tests\KanamiReporter.Windows.Tests.csproj", "{237A108C-2C54-4436-967D-D4494A573AE6}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{78E431A9-DF33-4A04-8BBF-55B3275F9F6E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{78E431A9-DF33-4A04-8BBF-55B3275F9F6E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{78E431A9-DF33-4A04-8BBF-55B3275F9F6E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{78E431A9-DF33-4A04-8BBF-55B3275F9F6E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6B8757D8-3CA6-47FB-994D-BC7E120CBCDC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6B8757D8-3CA6-47FB-994D-BC7E120CBCDC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6B8757D8-3CA6-47FB-994D-BC7E120CBCDC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6B8757D8-3CA6-47FB-994D-BC7E120CBCDC}.Release|Any CPU.Build.0 = Release|Any CPU
+		{21E8698E-45E5-40E5-B13D-F7BA58797192}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{21E8698E-45E5-40E5-B13D-F7BA58797192}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{21E8698E-45E5-40E5-B13D-F7BA58797192}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{21E8698E-45E5-40E5-B13D-F7BA58797192}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E1873AD3-1F2E-4E61-A4CE-88C250CF92E1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E1873AD3-1F2E-4E61-A4CE-88C250CF92E1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E1873AD3-1F2E-4E61-A4CE-88C250CF92E1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E1873AD3-1F2E-4E61-A4CE-88C250CF92E1}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5D2E0081-453A-4FAF-AD52-17597F53C211}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5D2E0081-453A-4FAF-AD52-17597F53C211}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5D2E0081-453A-4FAF-AD52-17597F53C211}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5D2E0081-453A-4FAF-AD52-17597F53C211}.Release|Any CPU.Build.0 = Release|Any CPU
+		{237A108C-2C54-4436-967D-D4494A573AE6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{237A108C-2C54-4436-967D-D4494A573AE6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{237A108C-2C54-4436-967D-D4494A573AE6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{237A108C-2C54-4436-967D-D4494A573AE6}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{78E431A9-DF33-4A04-8BBF-55B3275F9F6E} = {B13656FE-747A-4260-B18A-1B40C4DE143D}
+		{6B8757D8-3CA6-47FB-994D-BC7E120CBCDC} = {B13656FE-747A-4260-B18A-1B40C4DE143D}
+		{21E8698E-45E5-40E5-B13D-F7BA58797192} = {B13656FE-747A-4260-B18A-1B40C4DE143D}
+		{E1873AD3-1F2E-4E61-A4CE-88C250CF92E1} = {69DD8C33-680B-485A-8652-D0BDE7585DDC}
+		{5D2E0081-453A-4FAF-AD52-17597F53C211} = {013E2CF9-784B-41E5-9C65-7D7A4A7444CE}
+		{237A108C-2C54-4436-967D-D4494A573AE6} = {69DD8C33-680B-485A-8652-D0BDE7585DDC}
+	EndGlobalSection
+EndGlobal

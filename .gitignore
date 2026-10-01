@@ -1,0 +1,15 @@
+bin/
+obj/
+.vs/
+.idea/
+.vscode/
+*.user
+*.suo
+artifacts/
+publish/
+update.json
+.DS_Store
+Thumbs.db
+.nuget/
+.dotnet/
+.templateengine/
