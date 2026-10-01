@@ -29,6 +29,8 @@ public sealed class WindowsGraphicsCaptureSource : IFrameSource
     private long _lastPublishedFrameVersion;
     private int _uniformFrameCount;
     private int _processingFrame;
+    private int _frameCallbacksInFlight;
+    private int _captureActive;
     private bool _fallbackTriggered;
     private bool _disposed;
     private bool _isRunning;
@@ -132,6 +134,7 @@ public sealed class WindowsGraphicsCaptureSource : IFrameSource
 
             _session = _framePool.CreateCaptureSession(_item);
             _session.IsCursorCaptureEnabled = false;
+            Volatile.Write(ref _captureActive, 1);
             _session.StartCapture();
             _publishTimer = new System.Threading.Timer(PublishLatestFrame, null, 0, ReporterStates.CaptureIntervalMilliseconds);
         }
@@ -143,6 +146,26 @@ public sealed class WindowsGraphicsCaptureSource : IFrameSource
     }
 
     private void OnFrameArrived(Direct3D11CaptureFramePool sender, object args)
+    {
+        // 帧回调跑在采集线程上，StopCore 会等这里退出后才释放帧池和设备。
+        // 必须先登记再检查标志，否则登记之前 StopCore 可能已经等完并开始释放。
+        Interlocked.Increment(ref _frameCallbacksInFlight);
+        try
+        {
+            if (Volatile.Read(ref _captureActive) == 0)
+            {
+                return;
+            }
+
+            ProcessArrivedFrame(sender);
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _frameCallbacksInFlight);
+        }
+    }
+
+    private void ProcessArrivedFrame(Direct3D11CaptureFramePool sender)
     {
         try
         {
@@ -226,7 +249,8 @@ public sealed class WindowsGraphicsCaptureSource : IFrameSource
         CaptureTargetDescriptor? displayTarget = null;
         lock (_captureGate)
         {
-            if (_fallbackTriggered || _target is null || _target.Kind != CaptureTargetKind.Window)
+            if (_fallbackTriggered || _target is null || _target.Kind != CaptureTargetKind.Window ||
+                Volatile.Read(ref _captureActive) == 0)
             {
                 return;
             }
@@ -248,6 +272,12 @@ public sealed class WindowsGraphicsCaptureSource : IFrameSource
         await _lifecycleGate.WaitAsync();
         try
         {
+            // 等待期间用户可能已经手动停止，这时不能再把采集重新开起来。
+            if (Volatile.Read(ref _captureActive) == 0)
+            {
+                return;
+            }
+
             StopCore();
             StartCore(displayTarget, usedFallback: true);
             _isRunning = true;
@@ -292,33 +322,58 @@ public sealed class WindowsGraphicsCaptureSource : IFrameSource
 
     private void StopCore()
     {
+        // 先关门：之后进入的帧回调会立刻返回，不会再开始新的帧处理。
+        Volatile.Write(ref _captureActive, 0);
+
+        GraphicsCaptureSession? session;
+        Direct3D11CaptureFramePool? framePool;
+        IDirect3DDevice? device;
+        GraphicsCaptureItem? item;
+        System.Threading.Timer? publishTimer;
+
         lock (_captureGate)
         {
-            if (_framePool is not null)
-            {
-                _framePool.FrameArrived -= OnFrameArrived;
-            }
+            session = _session;
+            framePool = _framePool;
+            device = _device;
+            item = _item;
+            publishTimer = _publishTimer;
 
-            if (_item is not null)
-            {
-                _item.Closed -= OnItemClosed;
-            }
-
-            _publishTimer?.Dispose();
+            _session = null;
+            _framePool = null;
+            _device = null;
+            _item = null;
             _publishTimer = null;
             _latestFrame = null;
             _frameVersion = 0;
             _lastPublishedFrameVersion = 0;
-            _session?.Dispose();
-            _framePool?.Dispose();
-            _device?.Dispose();
-            _session = null;
-            _framePool = null;
-            _item = null;
-            _device = null;
             _uniformFrameCount = 0;
             _fallbackTriggered = false;
         }
+
+        if (framePool is not null)
+        {
+            framePool.FrameArrived -= OnFrameArrived;
+        }
+
+        if (item is not null)
+        {
+            item.Closed -= OnItemClosed;
+        }
+
+        publishTimer?.Dispose();
+
+        // 释放采集对象前先等在途帧回调退出。处理一帧只要几十毫秒，这里留 2 秒余量；
+        // 超时说明回调已被卡住，此时继续释放只是退回到修复前的行为，不会更糟。
+        var deadline = Environment.TickCount64 + 2000;
+        while (Volatile.Read(ref _frameCallbacksInFlight) != 0 && Environment.TickCount64 < deadline)
+        {
+            Thread.Sleep(1);
+        }
+
+        session?.Dispose();
+        framePool?.Dispose();
+        device?.Dispose();
     }
 
     private static IReadOnlyList<CaptureTargetDescriptor> EnumerateMonitors()
@@ -490,7 +545,9 @@ public sealed class WindowsGraphicsCaptureSource : IFrameSource
                 Marshal.Release(accessPointer);
             }
 
-            Marshal.Release(inspectable);
+            // 这里不能释放 inspectable：它只是 RCW 借出来的指针（NativeObject.ThisPtr 不做 AddRef），
+            // 那个引用由 RCW 自己在 Dispose/终结时释放。多释放一次会让对象提前销毁，
+            // 之后终结器就会去 Release 一块已经回收的内存，表现为随机的 0xc0000005 闪退。
         }
         var rowBytes = width * 4;
         for (var y = 0; y < height; y++)

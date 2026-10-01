@@ -4,6 +4,7 @@ public sealed class RecognitionEngine : IRecognitionEngine, IDisposable
 {
     private readonly string _templateDirectory;
     private readonly TemplateModel?[] _models = new TemplateModel?[ReporterStates.Count];
+    private readonly TemplateModel?[] _sideModels = new TemplateModel?[2];
     private readonly ReporterStateMachine _stateMachine = new();
     private readonly HashSet<string> _announcedEventsForState = new(StringComparer.Ordinal);
     private readonly object _gate = new();
@@ -21,6 +22,7 @@ public sealed class RecognitionEngine : IRecognitionEngine, IDisposable
     public event EventHandler<DetectionResult>? DetectionUpdated;
 
     public int LoadedTemplateCount => _models.Count(model => model is not null);
+    public int LoadedSideTemplateCount => _sideModels.Count(model => model is not null);
     public string TemplateDirectory => _templateDirectory;
 
     public TemplateModel? GetTemplate(StateId stateId) => _models[(int)stateId];
@@ -48,8 +50,29 @@ public sealed class RecognitionEngine : IRecognitionEngine, IDisposable
                 }
             }
 
+            _sideModels[0] = LoadSideTemplate(ReporterStates.AttackerSideTemplateName);
+            _sideModels[1] = LoadSideTemplate(ReporterStates.DefenderSideTemplateName);
+
             _stateMachine.Reset();
             ResetEventDeduplication();
+        }
+    }
+
+    private TemplateModel? LoadSideTemplate(string name)
+    {
+        var path = Path.Combine(_templateDirectory, name + ".krt");
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            return KrtTemplateStore.Load(path);
+        }
+        catch
+        {
+            return null;
         }
     }
 
@@ -73,10 +96,33 @@ public sealed class RecognitionEngine : IRecognitionEngine, IDisposable
                 matches[i] = model is not null && scores[i] >= threshold;
             }
 
-            var result = _stateMachine.ProcessFrame(normalizedFrame.Timestamp, matches, scores);
+            var sideSignal = BuildSideSignal(gray, threshold);
+            var result = _stateMachine.ProcessFrame(normalizedFrame.Timestamp, matches, scores, sideSignal);
             DetectionUpdated?.Invoke(this, result);
             return result;
         }
+    }
+
+    /// <summary>阵营标签是辅助判断，阈值允许比状态模板略低，避免缩放差异造成漏检。</summary>
+    private const double SideThresholdMargin = 0.05;
+    private const double SideThresholdFloor = 0.80;
+
+    /// <summary>阵营标签模板按同一阈值判定，只有确实命中一侧时才作为阵营依据。</summary>
+    private SideSignal BuildSideSignal(byte[] gray, double threshold)
+    {
+        if (_sideModels[0] is null && _sideModels[1] is null)
+        {
+            return SideSignal.None;
+        }
+
+        var sideThreshold = Math.Clamp(threshold - SideThresholdMargin, SideThresholdFloor, 1.0);
+        var attackerScore = _sideModels[0] is { } attacker ? FrameProcessing.Score(attacker, gray) : -1.0;
+        var defenderScore = _sideModels[1] is { } defender ? FrameProcessing.Score(defender, gray) : -1.0;
+        return new SideSignal(
+            attackerScore >= sideThreshold,
+            defenderScore >= sideThreshold,
+            attackerScore,
+            defenderScore);
     }
 
     public void SaveTemplate(StateId stateId, CapturedFrame normalizedFrame, Roi roi)

@@ -22,6 +22,8 @@ public sealed class AppSettings
         SchemaVersion = Math.Max(1, SchemaVersion);
         MatchThreshold = Math.Clamp(MatchThreshold, 0.50, 0.999);
         AudioVolume = Math.Clamp(AudioVolume, 0f, 1f);
+        // null 表示跟随系统输出，空字符串统一收敛为该语义。
+        AudioDeviceId = string.IsNullOrWhiteSpace(AudioDeviceId) ? null : AudioDeviceId;
     }
 }
 

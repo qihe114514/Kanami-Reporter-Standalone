@@ -7,7 +7,8 @@ namespace KanamiReporter.App;
 public sealed class BuiltInResourcePack
 {
     private const string ResourceName = "KanamiReporter.App.Assets.builtin-resources.zip";
-    private const int PackVersion = 1;
+    // v2：新增购买阶段「攻方 / 守方」阵营标记模板，用于每个回合校正攻守阵营。
+    private const int PackVersion = 2;
 
     private readonly AppPaths _paths;
     private readonly FileLogger _logger;

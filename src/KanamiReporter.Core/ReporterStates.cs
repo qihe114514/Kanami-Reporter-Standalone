@@ -53,6 +53,17 @@ public static class ReporterStates
         "game_end_draw"
     ];
 
+    /// <summary>
+    /// 阵营辅助模板的文件名（不含扩展名）：购买阶段横幅上的「攻方 / 守方」标签。
+    /// 它们不出现在状态列表里，只用于每个回合校正攻守阵营。
+    /// </summary>
+    public const string AttackerSideTemplateName = "side_attacker";
+
+    public const string DefenderSideTemplateName = "side_defender";
+
+    /// <summary>阵营辅助模板的展示名，用于诊断信息。</summary>
+    public static string GetSideTemplateDisplayName(bool attacker) => attacker ? "阵营标记：攻方" : "阵营标记：守方";
+
     public static readonly string[] DisplayNames =
     [
         "选择角色",
@@ -89,8 +100,9 @@ public static class ReporterStates
         ["event_overtime_round"] = "加时回合",
         ["event_game_start_second_half"] = "下半场开始",
         ["event_victory_in_last_3s"] = "最后3秒险胜",
-        ["event_round_end_attacker"] = "进攻方回合结束",
-        ["event_round_end_defender"] = "防守方回合结束",
+        ["event_round_end_attacker"] = "进攻方回合胜利",
+        ["event_round_end_defender"] = "防守方回合胜利",
+        ["event_round_end_defeat"] = "回合战败",
         ["event_round_win_all_alive"] = "全员存活获胜",
         ["event_round_end_five_kill"] = "五杀结束回合",
         ["event_game_end_win"] = "对局胜利",
@@ -111,8 +123,8 @@ public static class ReporterStates
         "识别每回合购买/准备阶段，并用于倒计时、半场和决胜回合判断。",
         "识别战斗进行阶段，结合阵营播放进攻或防守语音。",
         "识别炸弹安装后的阶段，用于安装完成播报。",
-        "识别本回合胜利结算，结合阵营播放对应播报。",
-        "识别本回合失败结算，结合阵营播放对应播报。",
+        "识别本回合胜利结算：攻方胜利播「赢了」，守方胜利播「成功守护」，最后3秒的险胜有专属语音。",
+        "识别本回合失败结算，播放战败安慰语音，不再误播胜利语音。",
         "识别五杀胜利结算。",
         "识别全员存活并获胜的结算界面。",
         "识别仅剩最后一人仍获胜的结算界面。",
@@ -152,9 +164,7 @@ public static class ReporterStates
             ],
             [StateId.RoundEndLose] =
             [
-                "event_round_end_attacker",
-                "event_round_end_defender",
-                "event_victory_in_last_3s"
+                "event_round_end_defeat"
             ],
             [StateId.RoundWinFiveKill] = ["event_round_end_five_kill"],
             [StateId.RoundWinAllAlive] = ["event_round_win_all_alive"],
@@ -187,6 +197,7 @@ public static class ReporterStates
         new("event_victory_in_last_3s", ["好，好险啊，香奈美可一直为你提心吊胆呢！.mp3"]),
         new("event_round_end_attacker", ["赢了！只要聚集起大家的力量，就一定能改变很多事情。.mp3"]),
         new("event_round_end_defender", ["各位成功的守护了很多东西呢。.mp3"]),
+        new("event_round_end_defeat", ["即使面对这样的局面，也战到了最后。.mp3"]),
         new("event_round_win_all_alive", ["全员留在舞台的身姿，是不是比任何时候都更加耀眼呢？.mp3"]),
         new("event_round_end_five_kill", ["哇！真是梦寐以求的完美表演呢！.mp3"]),
         new("event_game_end_win", ["演出完美谢幕，大家辛苦了！.mp3"]),

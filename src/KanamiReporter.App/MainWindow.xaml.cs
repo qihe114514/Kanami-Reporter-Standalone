@@ -1,8 +1,6 @@
 using System.Collections.ObjectModel;
-using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices.WindowsRuntime;
 using KanamiReporter.Core;
 using KanamiReporter.Windows;
@@ -22,11 +20,18 @@ namespace KanamiReporter.App;
 
 public partial class MainWindow : Window
 {
+    /// <summary>分数抖动小于该步长时不改变列表位置，避免分数接近的行反复互换。</summary>
+    private const double ReorderBucketSize = 0.01;
+
+    /// <summary>除“第一名换人”和“命中行数量变化”外，列表重排的最小间隔。</summary>
+    private const long ReorderIntervalMilliseconds = 1000;
+
+    private const int DebugLogCapacity = 160;
+    private const long FrameInfoIntervalMilliseconds = 1000;
+
     private readonly ReporterRuntime _runtime;
     private readonly AppSettings _settings;
     private readonly SettingsStore _settingsStore;
-    private readonly ResourceImporter _resourceImporter;
-    private readonly BuiltInResourcePack _builtInResources;
     private readonly GitHubUpdateService _updateService;
     private readonly FileLogger _logger;
     private readonly bool _startHidden;
@@ -34,6 +39,10 @@ public partial class MainWindow : Window
     private readonly SemaphoreSlim _dialogGate = new(1, 1);
     private readonly ObservableCollection<string> _debugMessages = new();
     private readonly ObservableCollection<TemplateScoreItem> _templateScores = new();
+    private readonly ObservableCollection<ResourceStateItem> _resourceStates = new();
+
+    /// <summary>按状态索引的同一批列表项：分数必须按状态写入，不能按列表位置写入（列表会重排）。</summary>
+    private readonly TemplateScoreItem[] _scoreItemsByState = new TemplateScoreItem[ReporterStates.Count];
 
     private GlobalHotkey? _hotkey;
     private WriteableBitmap? _previewBitmap;
@@ -46,16 +55,18 @@ public partial class MainWindow : Window
     private bool _updatingControls;
     private bool _isCaptureRunning;
     private bool _captureRefreshInProgress;
+    private bool _diagnosticsExpanded;
     private bool _loaded;
     private long _fpsWindowStarted;
     private int _framesInWindow;
+    private long _lastReorderTicks;
+    private long _lastFrameInfoTicks;
+    private int _lastHitCount;
 
     public MainWindow(
         ReporterRuntime runtime,
         AppSettings settings,
         SettingsStore settingsStore,
-        ResourceImporter resourceImporter,
-        BuiltInResourcePack builtInResources,
         GitHubUpdateService updateService,
         FileLogger logger,
         bool startHidden)
@@ -65,8 +76,6 @@ public partial class MainWindow : Window
         _runtime = runtime;
         _settings = settings;
         _settingsStore = settingsStore;
-        _resourceImporter = resourceImporter;
-        _builtInResources = builtInResources;
         _updateService = updateService;
         _logger = logger;
         _startHidden = startHidden;
@@ -81,6 +90,7 @@ public partial class MainWindow : Window
         AppWindow.Closing += AppWindow_Closing;
         Closed += MainWindow_Closed;
         RootGrid.Loaded += RootGrid_Loaded;
+        RootGrid.ActualThemeChanged += (_, _) => ApplyTitleBarColors();
 
         ConfigureWindow();
         InitializeStaticLists();
@@ -116,12 +126,7 @@ public partial class MainWindow : Window
         {
             ExtendsContentIntoTitleBar = true;
             SetTitleBar(AppTitleBar);
-            var titleBar = AppWindow.TitleBar;
-            titleBar.ButtonBackgroundColor = Colors.Transparent;
-            titleBar.ButtonInactiveBackgroundColor = Colors.Transparent;
-            titleBar.ButtonForegroundColor = Colors.White;
-            titleBar.ButtonInactiveForegroundColor = ColorHelper.FromArgb(150, 255, 255, 255);
-            titleBar.ButtonHoverBackgroundColor = ColorHelper.FromArgb(36, 255, 255, 255);
+            ApplyTitleBarColors();
         }
         catch (Exception exception)
         {
@@ -147,6 +152,34 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>标题栏并入窗口材质后，标题栏按钮颜色需要跟着主题走。</summary>
+    private void ApplyTitleBarColors()
+    {
+        try
+        {
+            var isDark = RootGrid.ActualTheme != ElementTheme.Light;
+            var titleBar = AppWindow.TitleBar;
+            titleBar.ButtonBackgroundColor = Colors.Transparent;
+            titleBar.ButtonInactiveBackgroundColor = Colors.Transparent;
+            titleBar.ButtonForegroundColor = isDark ? Colors.White : ColorHelper.FromArgb(255, 26, 26, 26);
+            titleBar.ButtonInactiveForegroundColor = isDark
+                ? ColorHelper.FromArgb(140, 255, 255, 255)
+                : ColorHelper.FromArgb(140, 0, 0, 0);
+            titleBar.ButtonHoverBackgroundColor = isDark
+                ? ColorHelper.FromArgb(36, 255, 255, 255)
+                : ColorHelper.FromArgb(20, 0, 0, 0);
+            titleBar.ButtonHoverForegroundColor = isDark ? Colors.White : Colors.Black;
+            titleBar.ButtonPressedBackgroundColor = isDark
+                ? ColorHelper.FromArgb(56, 255, 255, 255)
+                : ColorHelper.FromArgb(32, 0, 0, 0);
+            titleBar.ButtonPressedForegroundColor = isDark ? Colors.White : Colors.Black;
+        }
+        catch (Exception exception)
+        {
+            _logger.Warning($"设置标题栏颜色失败：{exception.Message}");
+        }
+    }
+
     private async void RootGrid_Loaded(object sender, RoutedEventArgs e)
     {
         if (_loaded)
@@ -155,6 +188,7 @@ public partial class MainWindow : Window
         }
 
         _loaded = true;
+        ApplyTitleBarColors();
         VersionText.Text = $"版本 {GetType().Assembly.GetName().Version?.ToString(3) ?? "1.0.0"}";
         LogPathText.Text = _logger.LogFile;
 
@@ -167,7 +201,8 @@ public partial class MainWindow : Window
 
         await ReloadTargetsAsync(showErrors: true);
         LoadAudioDevices();
-        RefreshResourceSummary();
+        await RefreshResourceStatusAsync();
+        ShowStage(running: false);
         StartCaptureAutoRefresh();
         UpdateCaptureControls();
 
@@ -238,12 +273,17 @@ public partial class MainWindow : Window
 
     private void InitializeStaticLists()
     {
-        DebugLogList.ItemsSource = _debugMessages;
-        TemplateScoreList.ItemsSource = _templateScores;
+        DebugLogRepeater.ItemsSource = _debugMessages;
+        TemplateScoreRepeater.ItemsSource = _templateScores;
+        ResourceStateRepeater.ItemsSource = _resourceStates;
 
         for (var i = 0; i < ReporterStates.Count; i++)
         {
-            _templateScores.Add(new TemplateScoreItem((StateId)i));
+            var stateId = (StateId)i;
+            var item = new TemplateScoreItem(stateId);
+            item.SetTemplateAvailability(_runtime.GetTemplate(stateId) is not null);
+            _scoreItemsByState[i] = item;
+            _templateScores.Add(item);
         }
     }
 
@@ -260,7 +300,7 @@ public partial class MainWindow : Window
         _settings.MinimizeWhenRecognitionStarts = false;
         _runtime.Threshold = _settings.MatchThreshold;
         _runtime.AudioVolume = _settings.AudioVolume;
-        DebugThresholdText.Text = $"匹配阈值：{_settings.MatchThreshold:0.000}";
+        UpdateMatchSummary();
         _updatingControls = false;
     }
 
@@ -272,8 +312,28 @@ public partial class MainWindow : Window
         menu.Items.Add(new WinForms.ToolStripSeparator());
         menu.Items.Add("退出", null, (_, _) => ExitApplication());
 
-        _trayIcon.Text = "香奈美播报员";
-        _trayIcon.Icon = System.Drawing.SystemIcons.Application;
+        _trayIcon.Text = "香奈美x黑潮爆破";
+        // 托盘图标用应用自身的图标；Assets 缺失时退回从 exe 提取，再不行才是系统占位图标。
+        var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "AppIcon.ico");
+        if (File.Exists(iconPath))
+        {
+            _trayIcon.Icon = new System.Drawing.Icon(iconPath);
+        }
+        else
+        {
+            try
+            {
+                _trayIcon.Icon = string.IsNullOrWhiteSpace(Environment.ProcessPath)
+                    ? System.Drawing.SystemIcons.Application
+                    : System.Drawing.Icon.ExtractAssociatedIcon(Environment.ProcessPath);
+            }
+            catch (Exception exception)
+            {
+                _logger.Warning($"提取托盘图标失败：{exception.Message}");
+                _trayIcon.Icon = System.Drawing.SystemIcons.Application;
+            }
+        }
+
         _trayIcon.ContextMenuStrip = menu;
         _trayIcon.Visible = true;
         _trayIcon.DoubleClick += (_, _) => ShowFromTray();
@@ -293,7 +353,8 @@ public partial class MainWindow : Window
 
     private async Task ReloadTargetsAsync(bool showErrors)
     {
-        if (_captureRefreshInProgress)
+        // 识别进行中不允许切换捕获源，也没有必要每隔两秒重新枚举一次窗口。
+        if (_captureRefreshInProgress || _isCaptureRunning)
         {
             return;
         }
@@ -309,18 +370,40 @@ public partial class MainWindow : Window
                 CaptureTargets.ItemsSource = targets;
             }
 
-            var selected = targets.FirstOrDefault(target => target.Id == previousTarget?.Id)
-                ?? targets.FirstOrDefault(target => target.Id == _settings.LastCaptureTargetId)
-                ?? targets.FirstOrDefault(target =>
+            // SelectedItem 必须指向当前 ItemsSource 里的实例，否则下拉框会丢掉当前选择。
+            var items = CaptureTargets.ItemsSource as IReadOnlyList<CaptureTargetDescriptor> ?? targets;
+            var selected = items.FirstOrDefault(target => target.Id == previousTarget?.Id)
+                ?? items.FirstOrDefault(target => target.Id == _settings.LastCaptureTargetId)
+                ?? items.FirstOrDefault(target =>
                     !string.IsNullOrWhiteSpace(_settings.LastCaptureProcessName) &&
                     string.Equals(target.ProcessName, _settings.LastCaptureProcessName, StringComparison.OrdinalIgnoreCase))
-                ?? targets.FirstOrDefault();
+                ?? items.FirstOrDefault();
 
-            CaptureTargets.SelectedItem = selected;
+            if (!ReferenceEquals(CaptureTargets.SelectedItem, selected))
+            {
+                CaptureTargets.SelectedItem = selected;
+            }
+
             _lastSelectedTarget = selected;
-            CaptureHintText.Text = targets.Count == 0
-                ? "没有找到可捕获的窗口或显示器。"
-                : $"已发现 {targets.Count} 个捕获源，列表每 2 秒自动刷新。";
+            ToolTipService.SetToolTip(
+                CaptureTargets,
+                targets.Count == 0
+                    ? "没有找到可捕获的窗口或显示器。"
+                    : $"已发现 {targets.Count} 个捕获源；列表每 2 秒自动刷新。");
+
+            if (targets.Count == 0)
+            {
+                SetCaptureHint("没有找到可捕获的窗口或显示器。请先启动游戏，再点“立即刷新”。", isProblem: true);
+            }
+            else
+            {
+                SetCaptureHint(string.Empty, isProblem: false);
+            }
+
+            if (!_isCaptureRunning && _lastDetectionResult is null)
+            {
+                SetText(TitleSourceText, selected?.DisplayName ?? "未选择捕获源");
+            }
         }
         catch (Exception exception)
         {
@@ -391,7 +474,7 @@ public partial class MainWindow : Window
     {
         if (CaptureTargets.SelectedItem is not CaptureTargetDescriptor target)
         {
-            await ShowMessageAsync("请先选择窗口或显示器。", "香奈美播报员");
+            await ShowMessageAsync("请先选择窗口或显示器。", "香奈美x黑潮爆破");
             return;
         }
 
@@ -399,20 +482,28 @@ public partial class MainWindow : Window
         {
             _settings.LastCaptureTargetId = target.Id;
             _settings.LastCaptureProcessName = target.ProcessName;
+
+            // 先切到运行态给出即时反馈，捕获真正开始后由状态事件更新文案。
+            _isCaptureRunning = true;
+            _lastDetectionResult = null;
+            UpdateCaptureControls();
+            ShowStage(running: true);
+            SetText(PreviewStatusText, "正在连接捕获源…");
+            SetText(DebugSourceText, $"捕获源：{target.DisplayName}");
+
             await _runtime.StartAsync(target);
             await _settingsStore.SaveAsync(_settings);
-            _isCaptureRunning = true;
-            UpdateCaptureControls();
 
-            DebugSourceText.Text = $"捕获源：{target.DisplayName}";
-            PreviewStatusText.Text = "实时预览";
-            TitleStatusText.Text = "识别中";
-            TitleSubtitleText.Text = target.DisplayName;
+            SetText(TitleSourceText, target.DisplayName);
+            SetCaptureHint(string.Empty, isProblem: false);
             AppendDebug($"开始识别：{target.DisplayName}");
         }
         catch (Exception exception)
         {
             _logger.Error("开始识别失败。", exception);
+            _isCaptureRunning = false;
+            UpdateCaptureControls();
+            ShowStage(running: false);
             await ShowMessageAsync(exception.Message, "无法开始采集");
         }
     }
@@ -423,7 +514,16 @@ public partial class MainWindow : Window
         {
             await _runtime.StopAsync();
             _isCaptureRunning = false;
+            _lastDetectionResult = null;
             UpdateCaptureControls();
+            ShowStage(running: false);
+            ResetTemplateScores();
+            ResetObservation();
+
+            SetText(TitleSourceText, _lastSelectedTarget?.DisplayName ?? "未选择捕获源");
+            SetText(DebugSourceText, "捕获源：未开始");
+            SetText(DebugFrameInfoText, "当前帧：等待首帧");
+            SetText(PreviewFooterMetaText, string.Empty);
             AppendDebug("识别已停止。");
         }
         catch (Exception exception)
@@ -435,10 +535,31 @@ public partial class MainWindow : Window
     private void UpdateCaptureControls()
     {
         CaptureTargets.IsEnabled = !_isCaptureRunning;
+        RefreshTargetsButton.IsEnabled = !_isCaptureRunning;
         StartRecognitionButton.IsEnabled = !_isCaptureRunning;
+        EmptyStateStartButton.IsEnabled = !_isCaptureRunning;
         StopRecognitionButton.IsEnabled = _isCaptureRunning;
-        TitleStatusText.Text = _isCaptureRunning ? "识别中" : "待机";
-        TitleSubtitleText.Text = _isCaptureRunning ? "正在分析捕获画面" : "识别已停止";
+
+        SetText(TitleStatusText, _isCaptureRunning ? "识别中" : "待机");
+        SetVisible(TitleStatusDotRunning, _isCaptureRunning);
+        SetVisible(TitleStatusDotIdle, !_isCaptureRunning);
+    }
+
+    /// <summary>空闲与运行两种舞台状态：空闲使用跟随主题的底色，运行使用固定的深色视频底。</summary>
+    private void ShowStage(bool running)
+    {
+        SetVisible(StageIdleSurface, !running);
+        SetVisible(StageRunningSurface, running);
+        SetVisible(PreviewEmptyState, !running);
+        SetVisible(FpsBadge, running);
+        SetVisible(PreviewStatusBadge, running);
+        SetVisible(RunPreviewImage, running);
+
+        if (!running)
+        {
+            _previewBitmap = null;
+            RunPreviewImage.Source = null;
+        }
     }
 
     private void Runtime_FrameAvailable(object? sender, CapturedFrame frame)
@@ -463,10 +584,16 @@ public partial class MainWindow : Window
         }
 
         _previewBitmap.Invalidate();
-        CaptureHintBorder.Visibility = Visibility.Collapsed;
-        PreviewStatusBadge.Visibility = Visibility.Visible;
-        PreviewStatusText.Text = "实时预览";
-        DebugFrameInfoText.Text = $"当前帧：{frame.Width}×{frame.Height}  时间 {frame.Timestamp.TotalSeconds:0.000} 秒";
+
+        var now = Environment.TickCount64;
+        if (now - _lastFrameInfoTicks >= FrameInfoIntervalMilliseconds)
+        {
+            _lastFrameInfoTicks = now;
+            SetText(PreviewFooterMetaText, $"{frame.Width}×{frame.Height}");
+            SetText(
+                DebugFrameInfoText,
+                $"当前帧：{frame.Width}×{frame.Height}  时间 {frame.Timestamp.TotalSeconds:0.0} 秒");
+        }
     }
 
     private void UpdateFrameRate()
@@ -486,7 +613,7 @@ public partial class MainWindow : Window
         var fps = _framesInWindow * 1000.0 / (now - _fpsWindowStarted);
         _framesInWindow = 0;
         _fpsWindowStarted = now;
-        DispatcherQueue.TryEnqueue(() => FpsText.Text = $"{fps:0.0} 帧/秒");
+        DispatcherQueue.TryEnqueue(() => SetText(FpsText, $"{fps:0.0} 帧/秒"));
     }
 
     private void Runtime_StatusChanged(object? sender, CaptureStatus status)
@@ -499,9 +626,26 @@ public partial class MainWindow : Window
 
         DispatcherQueue.TryEnqueue(() =>
         {
-            CaptureHintText.Text = status.Message;
-            PreviewStatusText.Text = status.IsRunning ? "实时预览" : "已停止";
             UpdateCaptureControls();
+
+            if (status.Error is not null)
+            {
+                SetCaptureHint(status.Message, isProblem: true);
+            }
+            else
+            {
+                SetCaptureHint(string.Empty, isProblem: false);
+            }
+
+            if (status.IsRunning)
+            {
+                SetText(PreviewStatusText, "实时预览");
+            }
+            else if (!_isCaptureRunning && status.Error is not null)
+            {
+                ShowStage(running: false);
+            }
+
             AppendDebug($"采集状态：{status.Message}");
         });
     }
@@ -518,27 +662,43 @@ public partial class MainWindow : Window
 
     private void UpdateObservation(DetectionResult result)
     {
-        CurrentStateText.Text = result.StateId is { } stateId
-            ? ReporterStates.GetDisplayName(stateId)
-            : "未知";
-        ScoreText.Text = result.BestScore < 0 ? "-" : result.BestScore.ToString("0.000");
-        DebugThresholdText.Text = $"匹配阈值：{_runtime.Threshold:0.000}";
-        DebugStateDurationText.Text = $"阶段计时：{result.StateDuration.TotalSeconds:0.0} 秒";
-        GameCountdownText.Text = result.EstimatedPhaseRemaining is { } remaining
-            ? FormatCountdown(remaining)
-            : "--:--";
-        GamePhaseText.Text = string.IsNullOrWhiteSpace(result.PhaseTimingLabel)
-            ? "实时识别"
-            : result.PhaseTimingLabel;
-        GameRoundText.Text = result.RoundNumber > 0 ? $"第 {result.RoundNumber} 回合" : "回合 --";
-        GameSideText.Text = result.Side switch
-        {
-            1 => "阵营：进攻方",
-            2 => "阵营：防守方",
-            _ => "阵营：未知"
-        };
-        GameEventText.Text = BuildNextEventText(result);
-        TitleSubtitleText.Text = $"{CurrentStateText.Text} · {GameCountdownText.Text}";
+        SetText(
+            CurrentStateText,
+            result.StateId is { } stateId ? ReporterStates.GetDisplayName(stateId) : "未知");
+        SetVisible(StateActiveDot, result.StateId is not null);
+
+        SetText(
+            DebugStateDurationText,
+            $"阶段计时：{result.StateDuration.TotalSeconds:0.0} 秒");
+        SetText(
+            GameCountdownText,
+            result.EstimatedPhaseRemaining is { } remaining ? FormatCountdown(remaining) : "--:--");
+        SetText(
+            GamePhaseText,
+            string.IsNullOrWhiteSpace(result.PhaseTimingLabel) ? "实时识别" : result.PhaseTimingLabel);
+        SetText(GameRoundText, result.RoundNumber > 0 ? $"第 {result.RoundNumber} 回合" : "回合 --");
+        SetText(
+            GameSideText,
+            result.Side switch
+            {
+                1 => "阵营：进攻方",
+                2 => "阵营：防守方",
+                _ => "阵营：未知"
+            });
+        SetText(GameEventText, BuildNextEventText(result));
+    }
+
+    private void ResetObservation()
+    {
+        SetText(CurrentStateText, "未知");
+        SetVisible(StateActiveDot, false);
+        SetText(GamePhaseText, "等待识别");
+        SetText(GameCountdownText, "--:--");
+        SetText(GameRoundText, "回合 --");
+        SetText(GameSideText, "阵营：未知");
+        SetText(DebugStateDurationText, "阶段计时：0 秒");
+        SetText(GameEventText, "等待识别数据");
+        SetText(MatchSummaryText, $"当前 — · 阈值 {_runtime.Threshold:0.000}");
     }
 
     private static string FormatCountdown(TimeSpan value)
@@ -548,9 +708,8 @@ public partial class MainWindow : Window
             value = TimeSpan.Zero;
         }
 
-        return value.TotalMinutes >= 1
-            ? $"{(int)value.TotalMinutes}:{value.Seconds:00}"
-            : $"{value.TotalSeconds:0.0} 秒";
+        // 识别每 100 毫秒刷新一次，保留一位小数才能跟着刷新走，不会一秒一跳。
+        return $"{value.TotalSeconds:0.0} 秒";
     }
 
     private static string BuildNextEventText(DetectionResult result)
@@ -620,30 +779,110 @@ public partial class MainWindow : Window
             return;
         }
 
+        var threshold = _runtime.Threshold;
         for (var i = 0; i < ReporterStates.Count; i++)
         {
             var score = result.Scores[i];
-            _templateScores[i].SetScore(score, score >= 0 && score >= _runtime.Threshold);
+            _scoreItemsByState[i].SetScore(score, score >= 0 && score >= threshold);
         }
 
-        var ordered = _templateScores
-            .OrderByDescending(item => item.Score)
-            .ThenBy(item => item.StateName, StringComparer.CurrentCulture)
+        ApplyStableOrder();
+
+        for (var i = 0; i < _templateScores.Count; i++)
+        {
+            _templateScores[i].SetRank(i + 1);
+        }
+
+        UpdateMatchSummary();
+    }
+
+    /// <summary>
+    /// 命中的行始终排在最前面，其余按分数分桶排序：分数差不足一档的两行保持现有先后次序，
+    /// 且重排最多每秒一次（命中数量变化或第一名换人例外）。分数逐帧抖动时列表因此基本静止。
+    /// </summary>
+    private void ApplyStableOrder()
+    {
+        var desired = _templateScores
+            .Select((item, index) => (item, index))
+            .OrderByDescending(pair => pair.item.IsHit)
+            .ThenByDescending(pair => ScoreBucket(pair.item))
+            .ThenBy(pair => pair.index)
+            .Select(pair => pair.item)
             .ToArray();
 
-        for (var targetIndex = 0; targetIndex < ordered.Length; targetIndex++)
+        var changed = false;
+        for (var i = 0; i < desired.Length; i++)
         {
-            var currentIndex = _templateScores.IndexOf(ordered[targetIndex]);
-            if (currentIndex != targetIndex)
+            if (!ReferenceEquals(desired[i], _templateScores[i]))
             {
-                _templateScores.Move(currentIndex, targetIndex);
+                changed = true;
+                break;
             }
         }
 
-        for (var i = 0; i < ordered.Length; i++)
+        if (!changed)
         {
-            ordered[i].SetRank(i + 1);
+            _lastHitCount = _templateScores.Count(item => item.IsHit);
+            return;
         }
+
+        var topChanged = !ReferenceEquals(desired[0], _templateScores[0]);
+        var hitCountChanged = _templateScores.Count(item => item.IsHit) != _lastHitCount;
+        if (!topChanged && !hitCountChanged &&
+            Environment.TickCount64 - _lastReorderTicks < ReorderIntervalMilliseconds)
+        {
+            return;
+        }
+
+        for (var target = 0; target < desired.Length; target++)
+        {
+            var current = _templateScores.IndexOf(desired[target]);
+            if (current != target)
+            {
+                _templateScores.Move(current, target);
+            }
+        }
+
+        _lastHitCount = _templateScores.Count(item => item.IsHit);
+        _lastReorderTicks = Environment.TickCount64;
+    }
+
+    private static int ScoreBucket(TemplateScoreItem item) =>
+        item.Score < 0 ? int.MinValue : (int)Math.Round(item.Score / ReorderBucketSize);
+
+    private void ResetTemplateScores()
+    {
+        foreach (var item in _templateScores)
+        {
+            item.Reset();
+        }
+
+        var desired = _templateScores.OrderBy(item => (int)item.StateId).ToArray();
+        for (var target = 0; target < desired.Length; target++)
+        {
+            var current = _templateScores.IndexOf(desired[target]);
+            if (current != target)
+            {
+                _templateScores.Move(current, target);
+            }
+        }
+
+        for (var i = 0; i < _templateScores.Count; i++)
+        {
+            _templateScores[i].SetRank(i + 1);
+        }
+
+        _lastReorderTicks = 0;
+        _lastHitCount = 0;
+        SetText(MatchSummaryText, $"当前 — · 阈值 {_runtime.Threshold:0.000}");
+    }
+
+    private void UpdateMatchSummary()
+    {
+        var score = _lastDetectionResult?.BestScore ?? -1;
+        SetText(
+            MatchSummaryText,
+            $"当前 {(score < 0 ? "—" : score.ToString("0.000"))} · 阈值 {_runtime.Threshold:0.000}");
     }
 
     private void Runtime_AnnouncementTriggered(object? sender, string eventId)
@@ -652,7 +891,8 @@ public partial class MainWindow : Window
         _logger.Info($"触发事件：{displayName} ({eventId})");
         DispatcherQueue.TryEnqueue(() =>
         {
-            VoicePlaybackText.Text = $"语音：准备播放 {displayName}";
+            SetText(VoicePlaybackText, $"语音：准备播放 {displayName}");
+            SetText(LastAnnouncementText, $"最近播报：{displayName} · {DateTime.Now:HH:mm:ss}");
             AppendDebug($"触发事件：{displayName}");
         });
     }
@@ -661,110 +901,14 @@ public partial class MainWindow : Window
     {
         DispatcherQueue.TryEnqueue(() =>
         {
-            VoicePlaybackText.Text = status.IsPlaying
+            var text = status.IsPlaying
                 ? $"语音：正在播放 {status.FileName}"
                 : status.IsCompleted
                     ? $"语音：播放完成 {status.FileName}"
                     : $"语音：播放失败 {status.FileName}";
-
-            AppendDebug(status.Error is null ? VoicePlaybackText.Text : $"语音失败：{status.Error.Message}");
+            SetText(VoicePlaybackText, text);
+            AppendDebug(status.Error is null ? text : $"语音失败：{status.Error.Message}");
         });
-    }
-
-    private void RefreshResourceSummary()
-    {
-        var templateLoaded = _runtime.LoadedTemplateCount;
-        var voicesDirectory = Path.Combine(Path.GetDirectoryName(_runtime.TemplateDirectory)!, "voices");
-        var voiceFiles = Directory.Exists(voicesDirectory)
-            ? Directory.GetFiles(voicesDirectory, "*.mp3")
-            : [];
-        var referencedNames = ReporterStates.VoiceTable
-            .SelectMany(item => item.FileNames)
-            .ToHashSet(StringComparer.Ordinal);
-        var mappedFiles = voiceFiles
-            .Where(path => referencedNames.Contains(Path.GetFileName(path)))
-            .ToArray();
-        var unboundFiles = voiceFiles
-            .Where(path => !referencedNames.Contains(Path.GetFileName(path)))
-            .Select(Path.GetFileName)
-            .Where(name => !string.IsNullOrWhiteSpace(name))
-            .Cast<string>()
-            .OrderBy(name => name)
-            .ToArray();
-        var missingTemplates = Enumerable.Range(0, ReporterStates.Count)
-            .Select(index => (StateId)index)
-            .Where(stateId => _runtime.GetTemplate(stateId) is null)
-            .Select(ReporterStates.GetDisplayName)
-            .ToArray();
-        var expectedTemplateFiles = ReporterStates.Names
-            .Select(name => name + ".krt")
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var unusedTemplateFiles = Directory.Exists(_runtime.TemplateDirectory)
-            ? Directory.GetFiles(_runtime.TemplateDirectory, "*.krt")
-                .Where(path => !expectedTemplateFiles.Contains(Path.GetFileName(path)))
-                .Select(Path.GetFileName)
-                .Where(name => !string.IsNullOrWhiteSpace(name))
-                .Cast<string>()
-                .OrderBy(name => name)
-                .ToArray()
-            : [];
-        var activeEventCount = ReporterStates.VoiceTable.Count(item =>
-            !ReporterStates.UnsupportedDynamicEvents.Contains(item.EventId) &&
-            item.FileNames.Any(name => File.Exists(Path.Combine(voicesDirectory, name))));
-        var pausedDynamicEvents = ReporterStates.VoiceTable
-            .Where(item => ReporterStates.UnsupportedDynamicEvents.Contains(item.EventId))
-            .Select(item => ReporterStates.GetEventDisplayName(item.EventId))
-            .ToArray();
-        var emptyVoiceEvents = ReporterStates.VoiceTable
-            .Where(item => item.FileNames.Count == 0)
-            .Select(item => ReporterStates.GetEventDisplayName(item.EventId))
-            .ToArray();
-
-        ResourceCountText.Text = $"模板 {templateLoaded}/{ReporterStates.Count} · 语音 {mappedFiles.Length}/{voiceFiles.Length}";
-        ResourceSummaryText.Text =
-            $"模板负责识别 {ReporterStates.Count} 个画面阶段；语音按事件播放，同一个模板可关联多条语音，所以数量不会一一对应。" +
-            $"当前自动接入 {activeEventCount} 条语音事件。";
-
-        var detail = new List<string>
-        {
-            $"已加载模板：{templateLoaded}/{ReporterStates.Count}",
-            $"语音文件：{voiceFiles.Length} 个，已映射 {mappedFiles.Length} 个，未映射 {unboundFiles.Length} 个",
-            $"未加载模板：{(missingTemplates.Length == 0 ? "无" : string.Join("、", missingTemplates))}",
-            $"旧版或未匹配的模板文件：{(unusedTemplateFiles.Length == 0 ? "无" : string.Join("、", unusedTemplateFiles))}",
-            $"未自动触发的动态事件：{(pausedDynamicEvents.Length == 0 ? "无" : string.Join("、", pausedDynamicEvents))}",
-            $"无音频占位事件：{(emptyVoiceEvents.Length == 0 ? "无" : string.Join("、", emptyVoiceEvents))}",
-            "状态 → 语音事件："
-        };
-
-        for (var i = 0; i < ReporterStates.Count; i++)
-        {
-            var stateId = (StateId)i;
-            var eventIds = ReporterStates.GetVoiceEventIds(stateId);
-            var activeCount = eventIds.Count(eventId =>
-            {
-                var definition = ReporterStates.VoiceTable.FirstOrDefault(item => item.EventId == eventId);
-                return definition is not null &&
-                       !ReporterStates.UnsupportedDynamicEvents.Contains(eventId) &&
-                       definition.FileNames.Any(name => File.Exists(Path.Combine(voicesDirectory, name)));
-            });
-            detail.Add($"  {ReporterStates.GetDisplayName(stateId)} → {activeCount}/{eventIds.Count} 条可用");
-        }
-
-        if (unboundFiles.Length > 0)
-        {
-            detail.Add("未映射语音文件：");
-            detail.AddRange(unboundFiles.Select(name => $"  {name}"));
-        }
-
-        ResourceDetailText.Text = string.Join(Environment.NewLine, detail);
-    }
-
-    private string? FindVoiceFile(VoiceDefinition definition)
-    {
-        var voicesDirectory = Path.Combine(Path.GetDirectoryName(_runtime.TemplateDirectory)!, "voices");
-        return definition.FileNames
-            .Select(name => Path.Combine(voicesDirectory, name))
-            .FirstOrDefault(File.Exists);
     }
 
     private void AppendDebug(string message)
@@ -782,13 +926,19 @@ public partial class MainWindow : Window
     private void AppendDebugCore(string line)
     {
         _debugMessages.Add(line);
-        while (_debugMessages.Count > 160)
+        while (_debugMessages.Count > DebugLogCapacity)
         {
             _debugMessages.RemoveAt(0);
         }
 
-        DebugLogList.ScrollIntoView(_debugMessages[^1]);
+        if (_diagnosticsExpanded)
+        {
+            ScrollLogToEnd();
+        }
     }
+
+    private void ScrollLogToEnd() =>
+        DispatcherQueue.TryEnqueue(() => DebugLogScroll.ChangeView(null, DebugLogScroll.ScrollableHeight, null));
 
     private void SettingsThresholdSlider_ValueChanged(object sender, RangeBaseValueChangedEventArgs e)
     {
@@ -800,6 +950,7 @@ public partial class MainWindow : Window
         SettingsThresholdText.Text = e.NewValue.ToString("0.000");
         _runtime.Threshold = e.NewValue;
         _settings.MatchThreshold = e.NewValue;
+        UpdateMatchSummary();
     }
 
     private void LoadAudioDevices()
@@ -807,17 +958,18 @@ public partial class MainWindow : Window
         try
         {
             var devices = _runtime.GetAudioDevices();
-            AudioDeviceList.ItemsSource = devices;
+            var choices = new List<AudioDeviceInfo>(devices.Count + 1) { AudioDeviceInfo.FollowSystem };
+            choices.AddRange(devices);
+            AudioDeviceList.ItemsSource = choices;
+
+            // 设备被拔出或配置为空时回到“跟随系统输出”，而不是固定到当时碰巧在用的设备。
             var selectedDevice =
-                devices.FirstOrDefault(device => device.Id == _settings.AudioDeviceId) ??
-                devices.FirstOrDefault(device => device.IsDefault) ??
-                devices.FirstOrDefault();
+                choices.FirstOrDefault(device => device.PlaybackDeviceId == _settings.AudioDeviceId) ??
+                AudioDeviceInfo.FollowSystem;
             AudioDeviceList.SelectedItem = selectedDevice;
-            _runtime.AudioDeviceId = selectedDevice?.Id;
+            _runtime.AudioDeviceId = selectedDevice.PlaybackDeviceId;
             AudioVolumeText.Text = $"{(int)Math.Round(AudioVolumeSlider.Value * 100)}%";
-            AppendDebug(selectedDevice is null
-                ? "未找到可用的音频输出设备。"
-                : $"音频输出：{selectedDevice.Name}");
+            AppendDebug(DescribeAudioOutput(selectedDevice, devices));
         }
         catch (Exception exception)
         {
@@ -825,9 +977,22 @@ public partial class MainWindow : Window
         }
     }
 
+    private static string DescribeAudioOutput(AudioDeviceInfo selected, IReadOnlyList<AudioDeviceInfo> devices)
+    {
+        if (!selected.IsFollowSystem)
+        {
+            return $"音频输出：{selected.Name}";
+        }
+
+        var current = devices.FirstOrDefault(device => device.IsDefault)?.Name;
+        return current is null
+            ? "音频输出：跟随系统输出（当前未检测到可用设备）。"
+            : $"音频输出：跟随系统输出（当前：{current}）";
+    }
+
     private void AudioDeviceList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        _runtime.AudioDeviceId = (AudioDeviceList.SelectedItem as AudioDeviceInfo)?.Id;
+        _runtime.AudioDeviceId = (AudioDeviceList.SelectedItem as AudioDeviceInfo)?.PlaybackDeviceId;
     }
 
     private void AudioVolumeSlider_ValueChanged(object sender, RangeBaseValueChangedEventArgs e)
@@ -850,7 +1015,7 @@ public partial class MainWindow : Window
         {
             _settings.MatchThreshold = SettingsThresholdSlider.Value;
             _settings.AudioVolume = (float)AudioVolumeSlider.Value;
-            _settings.AudioDeviceId = (AudioDeviceList.SelectedItem as AudioDeviceInfo)?.Id;
+            _settings.AudioDeviceId = (AudioDeviceList.SelectedItem as AudioDeviceInfo)?.PlaybackDeviceId;
             _settings.StartWithWindows = StartWithWindowsCheck.IsChecked == true;
             _settings.MinimizeToTray = MinimizeToTrayCheck.IsChecked == true;
             _settings.CheckForUpdates = CheckUpdatesCheck.IsChecked == true;
@@ -860,7 +1025,7 @@ public partial class MainWindow : Window
             _runtime.AudioVolume = _settings.AudioVolume;
             StartupRegistration.SetEnabled(_settings.StartWithWindows, Environment.ProcessPath ?? string.Empty);
             await _settingsStore.SaveAsync(_settings);
-            await ShowMessageAsync("设置已保存。", "香奈美播报员");
+            await ShowMessageAsync("设置已保存。", "香奈美x黑潮爆破");
         }
         catch (Exception exception)
         {
@@ -946,100 +1111,29 @@ public partial class MainWindow : Window
             _dialogGate.Release();
         }
     }
-}
 
-public sealed class TemplateScoreItem : INotifyPropertyChanged
-{
-    private double _score = -1;
-    private bool _isHit;
-    private int _rank;
-    private string _rankText = "--";
-    private string _scoreText = "  -  ";
-    private string _status = "无模板";
-    private Brush _statusBrush = new SolidColorBrush(Colors.Gray);
-
-    public TemplateScoreItem(StateId stateId)
+    /// <summary>写入文本只在内容真正变化时进行：观测面板每秒会刷新十次。</summary>
+    private static void SetText(TextBlock target, string text)
     {
-        StateId = stateId;
-    }
-
-    public event PropertyChangedEventHandler? PropertyChanged;
-
-    public StateId StateId { get; }
-    public string StateName => ReporterStates.GetDisplayName(StateId);
-    public double Score => _score;
-
-    public string RankText
-    {
-        get => _rankText;
-        private set => SetField(ref _rankText, value);
-    }
-
-    public string ScoreText
-    {
-        get => _scoreText;
-        private set => SetField(ref _scoreText, value);
-    }
-
-    public string Status
-    {
-        get => _status;
-        private set => SetField(ref _status, value);
-    }
-
-    public Brush StatusBrush
-    {
-        get => _statusBrush;
-        private set => SetField(ref _statusBrush, value);
-    }
-
-    public void SetScore(double score, bool isHit)
-    {
-        _score = score;
-        _isHit = isHit;
-        ScoreText = score < 0 ? "  -  " : score.ToString("0.000");
-        UpdateStatus();
-    }
-
-    public void SetRank(int rank)
-    {
-        _rank = rank;
-        RankText = rank.ToString("00");
-        UpdateStatus();
-    }
-
-    private void UpdateStatus()
-    {
-        if (_score < 0)
+        if (!string.Equals(target.Text, text, StringComparison.Ordinal))
         {
-            Status = "无模板";
-            StatusBrush = new SolidColorBrush(Colors.Gray);
-            return;
+            target.Text = text;
         }
-
-        if (_isHit)
-        {
-            Status = "命中";
-            StatusBrush = new SolidColorBrush(Colors.SeaGreen);
-            return;
-        }
-
-        Status = _rank == 1 ? "最高" : string.Empty;
-        StatusBrush = new SolidColorBrush(Colors.Orange);
     }
 
-    private void SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
+    private static void SetVisible(UIElement element, bool visible)
     {
-        if (EqualityComparer<T>.Default.Equals(field, value))
+        var value = visible ? Visibility.Visible : Visibility.Collapsed;
+        if (element.Visibility != value)
         {
-            return;
+            element.Visibility = value;
         }
+    }
 
-        field = value;
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+    /// <summary>常规情况不占用界面空间，只有需要用户注意时才显示这一行。</summary>
+    private void SetCaptureHint(string text, bool isProblem)
+    {
+        SetText(CaptureHintText, text);
+        SetVisible(CaptureHintText, isProblem && !string.IsNullOrWhiteSpace(text));
     }
 }
-
-
-
-

@@ -251,6 +251,118 @@ public sealed class CoreTests
     }
 
     [Fact]
+    public void LosingRoundNeverPlaysVictoryVoice()
+    {
+        var state = new ReporterStateMachine();
+        var events = new List<string>();
+        state.EventTriggered += events.Add;
+
+        // 防守方输掉回合（炸弹被引爆）：播战败语音，绝不播任何胜利语音。
+        state.ProcessFrame(
+            TimeSpan.Zero,
+            Matches(StateId.RoundIngame),
+            Scores(StateId.RoundIngame),
+            new SideSignal(AttackerHit: false, DefenderHit: true, AttackerScore: 0.42, DefenderScore: 0.97));
+
+        var result = state.ProcessFrame(
+            TimeSpan.FromSeconds(30),
+            Matches(StateId.RoundEndLose),
+            Scores(StateId.RoundEndLose));
+
+        Assert.Equal(2, result.Side);
+        Assert.Contains("event_round_end_defeat", events);
+        Assert.DoesNotContain("event_round_end_attacker", events);
+        Assert.DoesNotContain("event_round_end_defender", events);
+        Assert.DoesNotContain("event_victory_in_last_3s", events);
+    }
+
+    [Fact]
+    public void WinningRoundAnnouncesBySide()
+    {
+        var state = new ReporterStateMachine();
+        var events = new List<string>();
+        state.EventTriggered += events.Add;
+
+        state.ProcessFrame(
+            TimeSpan.Zero,
+            Matches(StateId.RoundIngame),
+            Scores(StateId.RoundIngame),
+            new SideSignal(AttackerHit: true, DefenderHit: false, AttackerScore: 0.97, DefenderScore: 0.31));
+        state.ProcessFrame(TimeSpan.FromSeconds(10), Matches(StateId.RoundEndWin), Scores(StateId.RoundEndWin));
+
+        Assert.Contains("event_round_end_attacker", events);
+        Assert.DoesNotContain("event_round_end_defender", events);
+
+        // 新一回合：守方守包点成功获胜，播守方胜利语音。
+        state.ProcessFrame(TimeSpan.FromSeconds(20), Matches(StateId.RoundStart), Scores(StateId.RoundStart));
+        state.ProcessFrame(
+            TimeSpan.FromSeconds(30),
+            Matches(StateId.RoundIngame),
+            Scores(StateId.RoundIngame),
+            new SideSignal(AttackerHit: false, DefenderHit: true, AttackerScore: 0.28, DefenderScore: 0.97));
+        state.ProcessFrame(TimeSpan.FromSeconds(40), Matches(StateId.RoundEndWin), Scores(StateId.RoundEndWin));
+
+        Assert.Contains("event_round_end_defender", events);
+        Assert.Equal(1, events.Count(id => id == "event_round_end_attacker"));
+    }
+
+    [Fact]
+    public void SideSignalCorrectsStaleSideWithinTheNextBuyPhase()
+    {
+        var state = new ReporterStateMachine();
+        var events = new List<string>();
+        state.EventTriggered += events.Add;
+
+        // 旧的阵营信息（例如从别处开始的识别）先被标记为进攻方。
+        state.ProcessFrame(TimeSpan.Zero, Matches(StateId.GameStartAttacker), Scores(StateId.GameStartAttacker));
+
+        // 购买阶段横幅显示「守方」，阵营应立即纠正。
+        var corrected = state.ProcessFrame(
+            TimeSpan.FromSeconds(10),
+            Matches(StateId.RoundStart),
+            Scores(StateId.RoundStart),
+            new SideSignal(AttackerHit: false, DefenderHit: true, AttackerScore: 0.31, DefenderScore: 0.99));
+        Assert.Equal(2, corrected.Side);
+
+        // 我方防守方输掉回合，播战败语音。
+        var roundEnd = state.ProcessFrame(
+            TimeSpan.FromSeconds(40),
+            Matches(StateId.RoundEndLose),
+            Scores(StateId.RoundEndLose));
+        Assert.Equal(2, roundEnd.Side);
+        Assert.Contains("event_round_end_defeat", events);
+        Assert.DoesNotContain("event_round_end_defender", events);
+        Assert.DoesNotContain("event_round_end_attacker", events);
+    }
+
+    [Fact]
+    public void SideSignalKeepsCurrentSideWhenBothLabelsAreClose()
+    {
+        var state = new ReporterStateMachine();
+
+        var attacker = state.ProcessFrame(
+            TimeSpan.Zero,
+            Matches(StateId.RoundIngame),
+            Scores(StateId.RoundIngame),
+            new SideSignal(AttackerHit: true, DefenderHit: false, AttackerScore: 0.95, DefenderScore: 0.40));
+        Assert.Equal(1, attacker.Side);
+
+        var ambiguous = state.ProcessFrame(
+            TimeSpan.FromSeconds(5),
+            Matches(StateId.RoundIngame),
+            Scores(StateId.RoundIngame),
+            new SideSignal(AttackerHit: true, DefenderHit: true, AttackerScore: 0.95, DefenderScore: 0.94));
+        Assert.Equal(1, ambiguous.Side);
+
+        var neither = state.ProcessFrame(
+            TimeSpan.FromSeconds(10),
+            Matches(StateId.RoundIngame),
+            Scores(StateId.RoundIngame),
+            SideSignal.None);
+        Assert.Equal(1, neither.Side);
+    }
+
+    [Fact]
     public void SettingsRoundTripAndNormalize()
     {
         var settings = new AppSettings
@@ -267,6 +379,34 @@ public sealed class CoreTests
         Assert.Equal(0.999, restored.MatchThreshold);
         Assert.Equal(1f, restored.AudioVolume);
         Assert.Equal("window:123", restored.LastCaptureTargetId);
+    }
+
+    [Fact]
+    public void FollowSystemDeviceUsesNullPlaybackId()
+    {
+        Assert.True(AudioDeviceInfo.FollowSystem.IsFollowSystem);
+        Assert.Null(AudioDeviceInfo.FollowSystem.PlaybackDeviceId);
+
+        var device = new AudioDeviceInfo("{0.0.0.00000000}.{guid}", "扬声器", true);
+        Assert.False(device.IsFollowSystem);
+        Assert.Equal(device.Id, device.PlaybackDeviceId);
+    }
+
+    [Fact]
+    public void AudioDeviceIdNormalizesToFollowSystem()
+    {
+        var blank = new AppSettings { AudioDeviceId = "   " };
+        blank.Normalize();
+        Assert.Null(blank.AudioDeviceId);
+
+        var pinned = new AppSettings { AudioDeviceId = "{0.0.0.00000000}.{guid}" };
+        pinned.Normalize();
+        Assert.Equal("{0.0.0.00000000}.{guid}", pinned.AudioDeviceId);
+
+        var restoredBlank = JsonSerializer.Deserialize<AppSettings>(JsonSerializer.Serialize(blank))!;
+        Assert.Null(restoredBlank.AudioDeviceId);
+        var restoredPinned = JsonSerializer.Deserialize<AppSettings>(JsonSerializer.Serialize(pinned))!;
+        Assert.Equal(pinned.AudioDeviceId, restoredPinned.AudioDeviceId);
     }
 
     private static string CreateTempDirectory()

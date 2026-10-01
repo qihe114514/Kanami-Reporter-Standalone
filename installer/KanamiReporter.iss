@@ -1,5 +1,5 @@
 #ifndef MyAppVersion
-  #define MyAppVersion "1.0.0"
+  #define MyAppVersion "1.0.4"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\artifacts\publish\win-x64"
@@ -10,14 +10,15 @@
 
 [Setup]
 AppId={{8E6DC812-7A25-4E81-9BC6-1632A71CE54B}
-AppName=Kanami Reporter
+AppName=香奈美x黑潮爆破
 AppVersion={#MyAppVersion}
+AppVerName=香奈美x黑潮爆破 {#MyAppVersion}
 AppPublisher=Yiyan
 AppPublisherURL=https://github.com/qihe114514/Kanami-Reporter-Standalone
 AppSupportURL=https://github.com/qihe114514/Kanami-Reporter-Standalone
 AppUpdatesURL=https://github.com/qihe114514/Kanami-Reporter-Standalone/releases
 DefaultDirName={localappdata}\Programs\KanamiReporter
-DefaultGroupName=Kanami Reporter
+DefaultGroupName=香奈美x黑潮爆破
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
@@ -29,13 +30,14 @@ SolidCompression=yes
 WizardStyle=modern
 SetupIconFile=..\src\KanamiReporter.App\Assets\AppIcon.ico
 UninstallDisplayIcon={app}\Assets\AppIcon.ico
+UninstallDisplayName=香奈美x黑潮爆破
 CloseApplications=yes
 CloseApplicationsFilter=KanamiReporter.exe
 RestartApplications=no
 SetupLogging=yes
 
 [Languages]
-Name: "english"; MessagesFile: "compiler:Default.isl"
+Name: "chinesesimplified"; MessagesFile: "{#SourcePath}\ChineseSimplified.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加任务："; Flags: unchecked
@@ -44,12 +46,12 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\Kanami Reporter"; Filename: "{app}\KanamiReporter.exe"
-Name: "{group}\卸载 Kanami Reporter"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\Kanami Reporter"; Filename: "{app}\KanamiReporter.exe"; Tasks: desktopicon
+Name: "{group}\香奈美x黑潮爆破"; Filename: "{app}\KanamiReporter.exe"
+Name: "{group}\卸载 香奈美x黑潮爆破"; Filename: "{uninstallexe}"
+Name: "{autodesktop}\香奈美x黑潮爆破"; Filename: "{app}\KanamiReporter.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\KanamiReporter.exe"; Description: "启动 Kanami Reporter"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\KanamiReporter.exe"; Description: "启动 香奈美x黑潮爆破"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"

@@ -6,21 +6,8 @@
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+                <ResourceDictionary Source="ms-appx:///Themes/Tokens.xaml" />
             </ResourceDictionary.MergedDictionaries>
-
-            <Style x:Key="Card" TargetType="Border">
-                <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
-                <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
-                <Setter Property="BorderThickness" Value="1" />
-                <Setter Property="CornerRadius" Value="8" />
-                <Setter Property="Padding" Value="16" />
-            </Style>
-
-            <Style x:Key="SectionHeader" TargetType="TextBlock">
-                <Setter Property="FontSize" Value="16" />
-                <Setter Property="FontWeight" Value="SemiBold" />
-                <Setter Property="Margin" Value="0,0,0,12" />
-            </Style>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

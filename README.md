@@ -1,8 +1,8 @@
-# Kanami Reporter 独立版
+# 香奈美x黑潮爆破（Kanami Reporter 独立版）
 
 > 本仓库是 [panedioic/Kanami-Reporter](https://github.com/panedioic/Kanami-Reporter) 的独立桌面重制版，保留原仓库的 GPL-2.0-or-later 许可证与识别逻辑来源。
 
-Kanami Reporter 是从原 OBS 视频滤镜重做而来的 Windows 桌面软件。它直接使用
+香奈美x黑潮爆破是从原 OBS 视频滤镜重做而来的 Windows 桌面软件。它直接使用
 Windows Graphics Capture 读取游戏窗口或显示器，在本机完成模板匹配、状态机判断
 和语音播报，不要求安装或启动 OBS，也不会注入游戏进程。
 
@@ -18,9 +18,12 @@ Windows Graphics Capture 读取游戏窗口或显示器，在本机完成模板�
 - 以 1920×1080 为识别基准，自动缩放 2560×1440 等来源尺寸。
 - 兼容原有 KRT v1 模板、中文 MP3 文件名和旧资源 ZIP。
 - 支持 15 个原状态名称和原有事件 ID。
+- 内置购买阶段「攻方 / 守方」阵营标记模板（`side_attacker` / `side_defender`），每个回合的购买阶段都会按横幅标签校正攻守阵营，避免结算语音播错阵营。
+- 每次开始识别都会复位状态机，上一次会话的回合、阵营不会带入新对局。
 - 捕获源列表每 2 秒自动刷新并保留当前选择；运行中也会重新枚举新出现的窗口。
-- 支持模板匹配阈值、常驻实时预览、按分数降序的逐模板匹配值和精简调试信息。
-- 支持枚举并选择本机音频输出设备、音量调整；同一事件配置多条语音时会随机选择可播放文件。
+- 支持模板匹配阈值、常驻实时预览、逐模板匹配值列表（命中的状态固定置顶）和精简调试信息。
+- 回合结算语音围绕玩家自己的胜负：回合胜利按阵营播报（攻方/守方各有专属语音，最后3秒险胜有专属语音），回合战败播报安慰语音，不再误播胜利语音。
+- 支持枚举并选择本机音频输出设备、音量调整，也可跟随系统输出（默认设备切换后自动跟进）；同一事件配置多条语音时会随机选择可播放文件。
 - 主界面会显示识别推算的回合、阵营、阶段计时、倒计时和下一语音判定，方便核对模板状态。
 - 资源状态会显示模板加载数、语音映射数、未映射语音文件以及暂未自动触发的动态事件。
 - 支持托盘运行、全局热键 `Ctrl+Alt+R`、开机启动和 GitHub Releases 更新检查。
@@ -46,8 +49,8 @@ Windows Graphics Capture 读取游戏窗口或显示器，在本机完成模板�
 ```text
 %LOCALAPPDATA%\KanamiReporter\
 ├── config.json
-├── .builtin-resources-v1   # 内置资源包已准备完成的标记
-├── templates\*.krt
+├── .builtin-resources-v2   # 内置资源包已准备完成的标记
+├── templates\*.krt         # 含 side_attacker / side_defender 阵营标记
 ├── voices\*.mp3
 └── logs\kanami-YYYYMMDD.log
 ```

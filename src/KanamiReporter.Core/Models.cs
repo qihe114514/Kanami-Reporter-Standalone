@@ -32,6 +32,20 @@ public readonly record struct Roi(int X, int Y, int Width, int Height)
     public static Roi Empty => new(0, 0, 0, 0);
 }
 
+/// <summary>
+/// 购买阶段横幅上「攻方 / 守方」标签的匹配结果。
+/// 横幅每个回合的开局都会出现，因此可以持续校正攻守阵营，
+/// 而不是只在整局或半场开始时才拿到一次阵营信息。
+/// </summary>
+public readonly record struct SideSignal(
+    bool AttackerHit,
+    bool DefenderHit,
+    double AttackerScore,
+    double DefenderScore)
+{
+    public static SideSignal None { get; } = new(false, false, -1.0, -1.0);
+}
+
 public sealed record DetectionResult(
     StateId? StateId,
     string StateName,
@@ -64,7 +78,16 @@ public sealed record CaptureStatus(
     bool UsedFallback = false,
     Exception? Error = null);
 
-public sealed record AudioDeviceInfo(string Id, string Name, bool IsDefault);
+public sealed record AudioDeviceInfo(string Id, string Name, bool IsDefault)
+{
+    /// <summary>跟随系统输出：每次播放时重新解析系统当前的默认输出设备。</summary>
+    public static AudioDeviceInfo FollowSystem { get; } = new(string.Empty, "跟随系统输出", false);
+
+    public bool IsFollowSystem => Id.Length == 0;
+
+    /// <summary>用于播放和保存的设备 ID；跟随系统输出时为 null。</summary>
+    public string? PlaybackDeviceId => IsFollowSystem ? null : Id;
+}
 
 public sealed record AnnouncementRequest(string EventId, IReadOnlyList<string> FileNames);
 

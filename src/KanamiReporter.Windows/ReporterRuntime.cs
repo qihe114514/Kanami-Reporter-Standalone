@@ -12,6 +12,7 @@ public sealed class ReporterRuntime : IAsyncDisposable
     private readonly object _gate = new();
     private CapturedFrame? _latestFrame;
     private long _lastProcessedTicks;
+    private string? _audioDeviceId;
     private bool _disposed;
 
     public ReporterRuntime(
@@ -50,17 +51,29 @@ public sealed class ReporterRuntime : IAsyncDisposable
     }
 
     public int LoadedTemplateCount => _engine.LoadedTemplateCount;
+    public int LoadedSideTemplateCount => _engine.LoadedSideTemplateCount;
     public TemplateModel? GetTemplate(StateId stateId) => _engine.GetTemplate(stateId);
     public IReadOnlyList<AudioDeviceInfo> GetAudioDevices() => _player.GetDevices();
     public string TemplateDirectory => _engine.TemplateDirectory;
     public double Threshold { get; set; } = ReporterStates.DefaultThreshold;
-    public string? AudioDeviceId { get; set; }
+    // null 表示跟随系统输出：播报时由播放器解析当前的系统默认设备。
+    public string? AudioDeviceId
+    {
+        get => _audioDeviceId;
+        set => _audioDeviceId = string.IsNullOrWhiteSpace(value) ? null : value;
+    }
+
     public float AudioVolume { get; set; } = 0.8f;
     public Task<IReadOnlyList<CaptureTargetDescriptor>> DiscoverTargetsAsync(CancellationToken cancellationToken = default) =>
         _frameSource.DiscoverTargetsAsync(cancellationToken);
 
-    public Task StartAsync(CaptureTargetDescriptor target, CancellationToken cancellationToken = default) =>
-        _frameSource.StartAsync(target, cancellationToken);
+    public Task StartAsync(CaptureTargetDescriptor target, CancellationToken cancellationToken = default)
+    {
+        // 每次开始识别都是新一局观测：清掉上一次会话残留的阵营、回合与去重状态，
+        // 否则回放或重开识别时会把旧阵营带进新对局，播错结算语音。
+        _engine.Reset();
+        return _frameSource.StartAsync(target, cancellationToken);
+    }
 
     public Task StopAsync() => _frameSource.StopAsync();
 

@@ -7,6 +7,9 @@ public sealed class ReporterStateMachine
     private const int RoundIngameDurationSeconds = 115;
     private const int BombPlantedDurationSeconds = 45;
 
+    /// <summary>两侧阵营标签同时命中时，需要领先这个分数才认为阵营确实是这一侧。</summary>
+    private const double SideScoreMargin = 0.03;
+
     private const string EventBomberDown = "event_bomber_down";
     private const string EventAlivePlayersUs1 = "event_alive_players_us_1";
     private const string EventAlivePlayersEnemy1 = "event_alive_players_enemy_1";
@@ -24,6 +27,7 @@ public sealed class ReporterStateMachine
     private const string EventVictoryInLast3s = "event_victory_in_last_3s";
     private const string EventRoundEndAttacker = "event_round_end_attacker";
     private const string EventRoundEndDefender = "event_round_end_defender";
+    private const string EventRoundEndDefeat = "event_round_end_defeat";
     private const string EventRoundWinAllAlive = "event_round_win_all_alive";
     private const string EventRoundEndFiveKill = "event_round_end_five_kill";
     private const string EventGameEndWin = "event_game_end_win";
@@ -64,13 +68,22 @@ public sealed class ReporterStateMachine
         ResetRoundTriggers();
     }
 
-    public DetectionResult ProcessFrame(TimeSpan now, IReadOnlyList<bool> matches, IReadOnlyList<double> scores)
+    public DetectionResult ProcessFrame(
+        TimeSpan now,
+        IReadOnlyList<bool> matches,
+        IReadOnlyList<double> scores,
+        SideSignal? side = null)
     {
         ArgumentNullException.ThrowIfNull(matches);
         ArgumentNullException.ThrowIfNull(scores);
         if (matches.Count != ReporterStates.Count || scores.Count != ReporterStates.Count)
         {
             throw new ArgumentException("状态判断结果数量不正确。");
+        }
+
+        if (side is { } sideSignal)
+        {
+            UpdateSide(sideSignal);
         }
 
         _currentStateTime = _currentStateId is not null && now >= _stateEnteredAt
@@ -159,6 +172,22 @@ public sealed class ReporterStateMachine
             timing.Label);
     }
 
+    /// <summary>
+    /// 用购买阶段横幅上的「攻方 / 守方」标签校正阵营。
+    /// 只有一侧明显命中才改阵营，标签淡入淡出或两侧接近时保持原值。
+    /// </summary>
+    private void UpdateSide(SideSignal signal)
+    {
+        var attacker = signal.AttackerHit && signal.AttackerScore + SideScoreMargin >= signal.DefenderScore;
+        var defender = signal.DefenderHit && signal.DefenderScore + SideScoreMargin >= signal.AttackerScore;
+        if (attacker == defender)
+        {
+            return;
+        }
+
+        _currentSide = attacker ? 1 : 2;
+    }
+
     private void TriggerForState(
         StateId stateId,
         StateId? lastStateId,
@@ -209,26 +238,31 @@ public sealed class ReporterStateMachine
                 break;
             case StateId.RoundEndWin:
             case StateId.RoundEndLose:
-                if (lastStateId == StateId.RoundIngame && durationBeforeTransition > TimeSpan.FromSeconds(112))
+                // 语音播报围绕玩家自己的回合结果：赢了才播胜利语音，战败一律播战败语音。
+                if (stateId == StateId.RoundEndWin)
                 {
-                    Trigger(EventVictoryInLast3s);
+                    if (lastStateId == StateId.RoundIngame && durationBeforeTransition > TimeSpan.FromSeconds(112))
+                    {
+                        Trigger(EventVictoryInLast3s);
+                    }
+                    else if (lastStateId == StateId.RoundIngameBombPlanted &&
+                             durationBeforeTransition > TimeSpan.FromSeconds(42) &&
+                             _currentSide == 2)
+                    {
+                        Trigger(EventVictoryInLast3s);
+                    }
+                    else if (_currentSide == 1)
+                    {
+                        Trigger(EventRoundEndAttacker);
+                    }
+                    else if (_currentSide == 2)
+                    {
+                        Trigger(EventRoundEndDefender);
+                    }
                 }
-                else if (lastStateId == StateId.RoundIngameBombPlanted &&
-                         durationBeforeTransition > TimeSpan.FromSeconds(42) &&
-                         _currentSide == 2 &&
-                         stateId == StateId.RoundEndWin)
+                else
                 {
-                    Trigger(EventVictoryInLast3s);
-                }
-                else if ((stateId == StateId.RoundEndWin && _currentSide == 1) ||
-                         (stateId == StateId.RoundEndLose && _currentSide == 2))
-                {
-                    Trigger(EventRoundEndAttacker);
-                }
-                else if ((stateId == StateId.RoundEndWin && _currentSide == 2) ||
-                         (stateId == StateId.RoundEndLose && _currentSide == 1))
-                {
-                    Trigger(EventRoundEndDefender);
+                    Trigger(EventRoundEndDefeat);
                 }
 
                 ResetRoundTriggers();

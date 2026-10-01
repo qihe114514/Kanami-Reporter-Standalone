@@ -139,8 +139,6 @@ public partial class App : Application
                 _runtime,
                 Settings,
                 SettingsStore,
-                ResourceImporter,
-                BuiltInResources,
                 UpdateService,
                 _logger,
                 startHidden);
