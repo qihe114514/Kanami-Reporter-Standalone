@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.WindowsRuntime;
 using KanamiReporter.Core;
 using KanamiReporter.Windows;
@@ -48,6 +49,8 @@ public partial class MainWindow : Window
     private WriteableBitmap? _previewBitmap;
     private DispatcherQueueTimer? _captureRefreshTimer;
     private DispatcherQueueTimer? _scoreRefreshTimer;
+    private nint _previousWindowProc;
+    private WindowProcDelegate? _windowProc;
     private CaptureTargetDescriptor? _lastSelectedTarget;
     private DetectionResult? _lastDetectionResult;
     private UpdateCheckResult? _availableUpdate;
@@ -209,6 +212,7 @@ public partial class MainWindow : Window
         try
         {
             var windowHandle = WinRT.Interop.WindowNative.GetWindowHandle(this);
+            InstallShutdownHook(windowHandle);
             _hotkey = new GlobalHotkey(
                 windowHandle,
                 GlobalHotkey.ModControl | GlobalHotkey.ModAlt,
@@ -504,6 +508,10 @@ public partial class MainWindow : Window
             _isCaptureRunning = false;
             UpdateCaptureControls();
             ShowStage(running: false);
+
+            // 失败常常是因为选中的窗口已经关闭或重建：立刻重扫一次捕获源，
+            // 把失效项从下拉框里换掉，否则用户再点一次还是一模一样的报错。
+            await ReloadTargetsAsync(showErrors: false);
             await ShowMessageAsync(exception.Message, "无法开始采集");
         }
     }
@@ -618,7 +626,16 @@ public partial class MainWindow : Window
 
     private void Runtime_StatusChanged(object? sender, CaptureStatus status)
     {
-        _logger.Info(status.Message);
+        // 采集层的告警（画面中断、已回退到显示器）只有写进日志和界面提示才有人看得见。
+        if (status.Error is not null || status.IsWarning)
+        {
+            _logger.Warning(status.Message);
+        }
+        else
+        {
+            _logger.Info(status.Message);
+        }
+
         if (!status.IsRunning)
         {
             _isCaptureRunning = false;
@@ -628,7 +645,9 @@ public partial class MainWindow : Window
         {
             UpdateCaptureControls();
 
-            if (status.Error is not null)
+            // 回退和告警都带着用户需要知道的信息（例如"已回退到显示器"），
+            // 不能像普通运行状态那样只写日志、把提示行清空。
+            if (status.Error is not null || status.UsedFallback || status.IsWarning)
             {
                 SetCaptureHint(status.Message, isProblem: true);
             }
@@ -1136,4 +1155,73 @@ public partial class MainWindow : Window
         SetText(CaptureHintText, text);
         SetVisible(CaptureHintText, isProblem && !string.IsNullOrWhiteSpace(text));
     }
+
+    /// <summary>
+    /// 接管窗口过程，专门处理"系统要求关闭"。
+    /// 默认设置是关闭窗口时最小化到托盘，如果连系统或安装程序的关闭请求也被当成"最小化到托盘"，
+    /// 进程就永远不会退出——安装程序会一直停在"正在关闭应用程序"（实测就是这样卡住的）。
+    /// </summary>
+    private void InstallShutdownHook(nint windowHandle)
+    {
+        _windowProc = WindowProc;
+        _previousWindowProc = SetWindowLongPtr(
+            windowHandle,
+            WindowProcIndex,
+            Marshal.GetFunctionPointerForDelegate(_windowProc));
+
+        if (_previousWindowProc == nint.Zero)
+        {
+            _windowProc = null;
+            _logger.Warning("接管窗口过程失败：系统关闭请求可能无法正常退出。");
+        }
+    }
+
+    private nint WindowProc(nint window, uint message, nint wParam, nint lParam)
+    {
+        if (message is WindowMessageQueryEndSession or WindowMessageEndSession)
+        {
+            // 关掉"最小化到托盘"，让随后到来的关闭请求真的把程序关掉。
+            _allowClose = true;
+            _logger.Info($"收到系统关闭请求（0x{message:X}），准备退出。");
+
+            if (message == WindowMessageQueryEndSession)
+            {
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    try
+                    {
+                        Close();
+                    }
+                    catch (Exception exception)
+                    {
+                        _logger.Warning($"响应系统关闭请求失败：{exception.Message}");
+                    }
+                });
+            }
+
+            return 1;
+        }
+
+        return CallWindowProc(_previousWindowProc, window, message, wParam, lParam);
+    }
+
+    private static nint SetWindowLongPtr(nint window, int index, nint value) =>
+        nint.Size == 8
+            ? SetWindowLongPtr64(window, index, value)
+            : SetWindowLong32(window, index, (int)value);
+
+    private delegate nint WindowProcDelegate(nint window, uint message, nint wParam, nint lParam);
+
+    private const int WindowProcIndex = -4;
+    private const uint WindowMessageQueryEndSession = 0x0011;
+    private const uint WindowMessageEndSession = 0x0016;
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]
+    private static extern nint SetWindowLongPtr64(nint window, int index, nint value);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongW")]
+    private static extern int SetWindowLong32(nint window, int index, int value);
+
+    [DllImport("user32.dll", EntryPoint = "CallWindowProcW")]
+    private static extern nint CallWindowProc(nint previous, nint window, uint message, nint wParam, nint lParam);
 }

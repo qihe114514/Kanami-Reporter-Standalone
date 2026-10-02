@@ -150,7 +150,7 @@ public sealed class CoreTests
     }
 
     [Fact]
-    public void StateMachineTriggersFirstRoundCountdownAtOriginalTime()
+    public void StateMachineTriggersFirstRoundCountdownWhenPhaseEstimateEnds()
     {
         var state = new ReporterStateMachine();
         var events = new List<string>();
@@ -158,7 +158,7 @@ public sealed class CoreTests
 
         state.ProcessFrame(TimeSpan.Zero, Matches(StateId.RoundStart), Scores(StateId.RoundStart));
         var beforeTrigger = state.ProcessFrame(
-            TimeSpan.FromSeconds(35),
+            TimeSpan.FromSeconds(30),
             Matches(StateId.RoundStart),
             Scores(StateId.RoundStart));
 
@@ -168,7 +168,7 @@ public sealed class CoreTests
         Assert.Equal(1, beforeTrigger.RoundNumber);
 
         state.ProcessFrame(
-            TimeSpan.FromSeconds(36),
+            TimeSpan.FromSeconds(31),
             Matches(StateId.RoundStart),
             Scores(StateId.RoundStart));
 

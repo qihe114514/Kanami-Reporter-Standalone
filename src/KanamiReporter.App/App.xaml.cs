@@ -46,7 +46,19 @@ public partial class App : Application
         {
             try
             {
-                Task.Run(async () => await _runtime.DisposeAsync()).GetAwaiter().GetResult();
+                _logger?.Info("开始释放运行时。");
+                var disposal = Task.Run(async () => await _runtime.DisposeAsync());
+
+                // 释放可能卡在采集对象、音频设备或采集线程上。这里不能无限等下去：
+                // 进程必须能退出，否则安装程序会一直停在"正在关闭应用程序"，用户只能去任务管理器手动结束。
+                if (disposal.Wait(TimeSpan.FromSeconds(5)))
+                {
+                    _logger?.Info("运行时已释放。");
+                }
+                else
+                {
+                    _logger?.Warning("释放运行时超过 5 秒仍未完成，直接退出进程。");
+                }
             }
             catch (Exception exception)
             {
@@ -122,7 +134,7 @@ public partial class App : Application
             UpdateService = new GitHubUpdateService(
                 "https://github.com/qihe114514/Kanami-Reporter-Standalone/releases/latest/download/update.json");
 
-            var frameSource = new WindowsGraphicsCaptureSource();
+            var frameSource = new WindowsGraphicsCaptureSource(_logger);
             var engine = new RecognitionEngine(Paths.Templates);
             var player = new NAudioAnnouncementPlayer();
             _runtime = new ReporterRuntime(Paths, _logger, frameSource, engine, player)

@@ -30,7 +30,13 @@ public static class ReporterStates
     public const int MaxTemplatePixels = 262144;
     public const double DefaultThreshold = 0.90;
     public const int CaptureIntervalMilliseconds = 100;
-    public const int FirstRoundStartCountdownSeconds = 36;
+
+    /// <summary>
+    /// 「回合开始最后5秒」语音的触发时刻：从进入购买/准备阶段算起，对应回合正式开始前的最后 5 秒。
+    /// 第一回合的准备阶段比常规回合更长，所以触发点更靠后。
+    /// </summary>
+    public const int FirstRoundStartCountdownSeconds = 31;
+
     public const int RegularRoundStartCountdownSeconds = 22;
     public const int OvertimeRoundStartCountdownSeconds = 37;
 

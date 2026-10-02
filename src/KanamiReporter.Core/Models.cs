@@ -6,6 +6,17 @@ public enum CaptureTargetKind
     Display
 }
 
+/// <summary>
+/// 采集后端。Auto：优先用 Windows 图形捕获，读不出像素时自动改用抓屏；
+/// GraphicsCapture：只用图形捕获；Grab：直接用抓屏（部分机器上图形捕获拿不到画面时的兼容模式）。
+/// </summary>
+public enum CaptureBackend
+{
+    Auto,
+    GraphicsCapture,
+    Grab
+}
+
 public readonly record struct RectI(int X, int Y, int Width, int Height)
 {
     public bool IsEmpty => Width <= 0 || Height <= 0;
@@ -72,11 +83,16 @@ public sealed record TemplateMatchDetails(
     int BestOffsetY,
     IReadOnlyList<MatchOffsetDetail> Offsets);
 
+/// <summary>
+/// 采集状态。Warning 用于"采集仍在运行但需要用户注意"的情况（画面中断、已回退到显示器），
+/// 界面会把它当提示显示，但不会改变运行状态。
+/// </summary>
 public sealed record CaptureStatus(
     bool IsRunning,
     string Message,
     bool UsedFallback = false,
-    Exception? Error = null);
+    Exception? Error = null,
+    bool IsWarning = false);
 
 public sealed record AudioDeviceInfo(string Id, string Name, bool IsDefault)
 {
