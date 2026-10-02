@@ -1,0 +1,3 @@
+# 安装器读取的文本文件对 BOM 与 CRLF 敏感，禁止 Git 做换行转换。
+installer/DISCLAIMER.txt -text
+installer/ChineseSimplified.isl -text

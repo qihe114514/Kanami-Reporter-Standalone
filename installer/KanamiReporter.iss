@@ -1,5 +1,5 @@
 #ifndef MyAppVersion
-  #define MyAppVersion "1.0.4"
+  #define MyAppVersion "1.0.5"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\artifacts\publish\win-x64"
@@ -28,6 +28,7 @@ OutputBaseFilename=KanamiReporter-Setup-x64-{#MyAppVersion}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
+LicenseFile={#SourcePath}\DISCLAIMER.txt
 SetupIconFile=..\src\KanamiReporter.App\Assets\AppIcon.ico
 UninstallDisplayIcon={app}\Assets\AppIcon.ico
 UninstallDisplayName=香奈美x黑潮爆破

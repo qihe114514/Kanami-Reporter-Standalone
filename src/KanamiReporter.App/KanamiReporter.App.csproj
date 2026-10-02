@@ -17,9 +17,9 @@
     <LangVersion>latest</LangVersion>
     <AssemblyName>KanamiReporter</AssemblyName>
     <RootNamespace>KanamiReporter.App</RootNamespace>
-    <Version>1.0.4</Version>
-    <AssemblyVersion>1.0.4.0</AssemblyVersion>
-    <FileVersion>1.0.4.0</FileVersion>
+    <Version>1.0.5</Version>
+    <AssemblyVersion>1.0.5.0</AssemblyVersion>
+    <FileVersion>1.0.5.0</FileVersion>
     <Authors>Yiyan</Authors>
     <Product>香奈美x黑潮爆破</Product>
     <Copyright>GPL-2.0-or-later</Copyright>
