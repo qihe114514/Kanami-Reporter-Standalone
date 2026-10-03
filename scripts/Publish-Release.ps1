@@ -3,7 +3,8 @@ param(
     [Parameter(Mandatory = $true)][string]$Version,
     [string]$Repo = 'qihe114514/Kanami-Reporter-Standalone',
     [string]$ReleaseDir = 'artifacts\release',
-    [string]$TagPrefix = 'v'
+    [string]$TagPrefix = 'v',
+    [string]$Proxy
 )
 
 # 手动发版脚本：CI 的 Publish GitHub Release 步骤因为 workflow 缺少 contents: write 权限一直失败
@@ -56,9 +57,17 @@ $headers = @{ Authorization = "token $token"; 'User-Agent' = 'KanamiRelease' }
 $notes = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $notesPath).Path, [Text.Encoding]::UTF8)
 $name = (($notes -split "`r?`n")[0]) -replace '^#+\s*', ''
 
+# Optional explicit proxy, e.g. -Proxy http://127.0.0.1:7897 (the system proxy).
+# Without it, .NET uses the system/WinINET proxy settings by default.
+$proxyArgs = @{}
+if ($Proxy) {
+    $proxyArgs['Proxy'] = $Proxy
+    "using proxy: $Proxy"
+}
+
 $release = $null
 try {
-    $release = Invoke-RestMethod -Method Get -Uri "https://api.github.com/repos/$Repo/releases/tags/$tag" -Headers $headers -TimeoutSec 60
+    $release = Invoke-RestMethod -Method Get -Uri "https://api.github.com/repos/$Repo/releases/tags/$tag" -Headers $headers -TimeoutSec 60 @proxyArgs
     "release $tag already exists (id=$($release.id)), reusing it"
 } catch {
     $release = $null
@@ -75,7 +84,7 @@ if (-not $release) {
     } | ConvertTo-Json -Depth 4
     $bodyBytes = [Text.Encoding]::UTF8.GetBytes($payload)
     $release = Invoke-RestMethod -Method Post -Uri "https://api.github.com/repos/$Repo/releases" `
-        -Headers $headers -ContentType 'application/json; charset=utf-8' -Body $bodyBytes -TimeoutSec 120
+        -Headers $headers -ContentType 'application/json; charset=utf-8' -Body $bodyBytes -TimeoutSec 120 @proxyArgs
     "created release: id=$($release.id) tag=$($release.tag_name)"
 }
 
@@ -96,10 +105,10 @@ foreach ($path in @(
     "uploading $($item.Name) ($([math]::Round($item.Length / 1MB, 1)) MB)"
     $result = Invoke-RestMethod -Method Post `
         -Uri "https://uploads.github.com/repos/$Repo/releases/$($release.id)/assets?name=$($item.Name)" `
-        -Headers $headers -ContentType 'application/octet-stream' -InFile $item.FullName -TimeoutSec 1800
+        -Headers $headers -ContentType 'application/octet-stream' -InFile $item.FullName -TimeoutSec 1800 @proxyArgs
     "  uploaded: $($result.name) state=$($result.state) size=$($result.size)"
 }
 
-$final = Invoke-RestMethod -Method Get -Uri "https://api.github.com/repos/$Repo/releases/tags/$tag" -Headers $headers -TimeoutSec 60
+$final = Invoke-RestMethod -Method Get -Uri "https://api.github.com/repos/$Repo/releases/tags/$tag" -Headers $headers -TimeoutSec 60 @proxyArgs
 "release url: $($final.html_url)"
 foreach ($a in $final.assets) { "  - $($a.name) $($a.size) bytes" }
