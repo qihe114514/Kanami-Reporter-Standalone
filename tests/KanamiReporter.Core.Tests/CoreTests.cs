@@ -89,9 +89,25 @@ public sealed class CoreTests
 
         var details = FrameProcessing.ScoreDetailed(model, gray);
         Assert.Equal(1.0, details.BestScore, 10);
-        Assert.Equal(5, details.Offsets.Count);
-        Assert.Equal(0, details.BestOffsetX);
-        Assert.Equal(0, details.BestOffsetY);
+        Assert.Equal(13, details.Offsets.Count);
+        Assert.Equal(0.0, details.BestOffsetX);
+        Assert.Equal(0.0, details.BestOffsetY);
+    }
+
+    [Fact]
+    public void HalfPixelShiftStillMatches()
+    {
+        // 16:10 实机里 HUD 会落在小数像素上：半像素偏移必须仍能匹配。
+        var directory = CreateTempDirectory();
+        var roi = new Roi(100, 100, 64, 64);
+        var gray = CreateGrayFrame();
+        ShiftRightHalfPixel(gray);
+        var pixels = Extract(gray, roi);
+        var path = Path.Combine(directory, "half.krt");
+        KrtTemplateStore.Save(path, new TemplateModel { Roi = roi, Pixels = pixels });
+        var model = KrtTemplateStore.Load(path);
+
+        Assert.True(FrameProcessing.Score(model, gray) > 0.99);
     }
 
     [Fact]
@@ -132,6 +148,106 @@ public sealed class CoreTests
     }
 
     [Fact]
+    public void NormalizerAlignsSixteenByTenTopAndCropsBottom()
+    {
+        // 16:10（2560x1600）按宽度缩放到 1920x1200，保留顶部、裁掉超出的 120 行。
+        const int width = 2560;
+        const int height = 1600;
+        var source = new byte[width * height * 4];
+        PaintSquare(source, width, 1200, 60, 16, 16);
+        PaintSquare(source, width, 1200, 1500, 16, 16);
+
+        var destination = FrameProcessing.Normalize(source, width, height);
+
+        // 源 (1200,60) → 归一化 (900,45)：顶部不补黑边、不移位。
+        Assert.Equal(255, destination[(((45 * ReporterStates.FrameWidth) + 900) * 4) + 2]);
+        Assert.Equal(0, destination[0]);
+
+        // 靠底的标记应当被裁掉：整帧只剩第一个标记（16×16 经 0.75 缩放后约 12×12）的亮像素。
+        var brightCount = 0;
+        for (var i = 0; i < ReporterStates.FrameWidth * ReporterStates.FrameHeight; i++)
+        {
+            if (destination[i * 4 + 2] > 128)
+            {
+                brightCount++;
+            }
+        }
+
+        Assert.Equal(12 * 12, brightCount);
+    }
+
+    [Fact]
+    public void NormalizerKeepsLetterboxingForWideSources()
+    {
+        // 21:9（2560x1080）比 16:9 更宽：仍按宽度缩放并垂直居中补黑边（原有行为）。
+        const int width = 2560;
+        const int height = 1080;
+        var source = new byte[width * height * 4];
+        for (var i = 0; i < width * height; i++)
+        {
+            source[i * 4 + 2] = 255;
+        }
+
+        var destination = FrameProcessing.Normalize(source, width, height);
+
+        // 810 行内容居中：顶部与底部是黑边，中间是内容。
+        Assert.Equal(0, destination[0]);
+        Assert.Equal(255, destination[(((ReporterStates.FrameHeight / 2) * ReporterStates.FrameWidth) + 960) * 4 + 2]);
+        Assert.Equal(0, destination[^1]);
+    }
+
+    [Fact]
+    public void RecognitionEngineLoadsVariantsAndTakesBestScore()
+    {
+        var directory = CreateTempDirectory();
+        var gray = CreateGrayFrame();
+        var primaryRoi = new Roi(100, 100, 64, 64);
+        var variantRoi = new Roi(300, 100, 64, 64);
+
+        KrtTemplateStore.Save(
+            Path.Combine(directory, "round_start.krt"),
+            new TemplateModel { Roi = primaryRoi, Pixels = Extract(gray, primaryRoi) });
+        KrtTemplateStore.Save(
+            Path.Combine(directory, "round_start.16x10.krt"),
+            new TemplateModel { Roi = variantRoi, Pixels = Extract(gray, variantRoi) });
+
+        using var engine = new RecognitionEngine(directory);
+        Assert.Equal(1, engine.LoadedTemplateCount);
+        Assert.Equal(1, engine.LoadedVariantCount);
+
+        // 帧里只包含变体位置的内容 → 变体命中，主模板不该拖后腿。
+        var bgra = new byte[ReporterStates.FrameBytes];
+        for (var i = 0; i < ReporterStates.FrameWidth * ReporterStates.FrameHeight; i++)
+        {
+            bgra[i * 4] = bgra[i * 4 + 1] = bgra[i * 4 + 2] = gray[i];
+            bgra[i * 4 + 3] = 255;
+        }
+
+        var result = engine.Process(
+            new CapturedFrame(bgra, ReporterStates.FrameWidth, ReporterStates.FrameHeight, TimeSpan.Zero),
+            ReporterStates.DefaultThreshold);
+
+        Assert.Equal(StateId.RoundStart, result.StateId);
+        Assert.True(result.BestScore > 0.99);
+    }
+
+    [Fact]
+    public void StateMachineResetsRoundNumberAfterMatchEnd()
+    {
+        var state = new ReporterStateMachine();
+
+        Assert.Equal(1, state.ProcessFrame(TimeSpan.Zero, Matches(StateId.RoundStart), Scores(StateId.RoundStart)).RoundNumber);
+        state.ProcessFrame(TimeSpan.FromSeconds(30), Matches(StateId.RoundIngame), Scores(StateId.RoundIngame));
+        Assert.Equal(2, state.ProcessFrame(TimeSpan.FromSeconds(140), Matches(StateId.RoundStart), Scores(StateId.RoundStart)).RoundNumber);
+
+        var matchEnd = state.ProcessFrame(TimeSpan.FromSeconds(280), Matches(StateId.GameEndWin), Scores(StateId.GameEndWin));
+        Assert.Equal(0, matchEnd.RoundNumber);
+
+        // 下一局从第 1 回合重新数。
+        Assert.Equal(1, state.ProcessFrame(TimeSpan.FromSeconds(300), Matches(StateId.RoundStart), Scores(StateId.RoundStart)).RoundNumber);
+    }
+
+    [Fact]
     public void StateMachineEmitsTimedEventsOnlyOnce()
     {
         var state = new ReporterStateMachine();
@@ -158,7 +274,7 @@ public sealed class CoreTests
 
         state.ProcessFrame(TimeSpan.Zero, Matches(StateId.RoundStart), Scores(StateId.RoundStart));
         var beforeTrigger = state.ProcessFrame(
-            TimeSpan.FromSeconds(30),
+            TimeSpan.FromSeconds(33),
             Matches(StateId.RoundStart),
             Scores(StateId.RoundStart));
 
@@ -168,7 +284,7 @@ public sealed class CoreTests
         Assert.Equal(1, beforeTrigger.RoundNumber);
 
         state.ProcessFrame(
-            TimeSpan.FromSeconds(31),
+            TimeSpan.FromSeconds(34),
             Matches(StateId.RoundStart),
             Scores(StateId.RoundStart));
 
@@ -176,8 +292,9 @@ public sealed class CoreTests
     }
 
     [Fact]
-    public void StateMachineTriggersRegularRoundCountdownAtOriginalTime()
+    public void StateMachineTriggersRegularRoundCountdownAtMeasuredTime()
     {
+        // 常规回合购买阶段实测约 25 秒，「最后5秒」在进入购买阶段 20 秒后触发。
         var state = new ReporterStateMachine();
         var events = new List<string>();
         state.EventTriggered += events.Add;
@@ -191,18 +308,33 @@ public sealed class CoreTests
         Assert.Equal(2, secondRoundStart.RoundNumber);
 
         var beforeTrigger = state.ProcessFrame(
-            TimeSpan.FromSeconds(41),
+            TimeSpan.FromSeconds(39),
             Matches(StateId.RoundStart),
             Scores(StateId.RoundStart));
         Assert.DoesNotContain("event_round_start_last_5s", events);
         Assert.Equal(TimeSpan.FromSeconds(1), beforeTrigger.EstimatedPhaseRemaining);
 
         state.ProcessFrame(
-            TimeSpan.FromSeconds(42),
+            TimeSpan.FromSeconds(40),
             Matches(StateId.RoundStart),
             Scores(StateId.RoundStart));
 
         Assert.Single(events, "event_round_start_last_5s");
+    }
+
+    [Fact]
+    public void SecondHalfFirstRoundUsesFirstRoundCountdown()
+    {
+        // 第 10 回合是下半场首回合，准备阶段与上半场首回合一样长。
+        Assert.Equal(
+            ReporterStates.FirstRoundStartCountdownSeconds,
+            ReporterStates.GetRoundStartCountdownSeconds(10));
+        Assert.Equal(
+            ReporterStates.FirstRoundStartCountdownSeconds,
+            ReporterStates.GetRoundStartCountdownSeconds(1));
+        Assert.Equal(
+            ReporterStates.RegularRoundStartCountdownSeconds,
+            ReporterStates.GetRoundStartCountdownSeconds(11));
     }
 
     [Fact]
@@ -336,6 +468,77 @@ public sealed class CoreTests
     }
 
     [Fact]
+    public void SideFlipAnnouncesSwitchOnlyAfterKnownSide()
+    {
+        var state = new ReporterStateMachine();
+        var events = new List<string>();
+        state.EventTriggered += events.Add;
+
+        // 第一次拿到阵营（守方）不算「攻守互换」。
+        var first = state.ProcessFrame(
+            TimeSpan.Zero,
+            Matches(StateId.RoundIngame),
+            Scores(StateId.RoundIngame),
+            new SideSignal(AttackerHit: false, DefenderHit: true, AttackerScore: 0.31, DefenderScore: 0.99));
+        Assert.Equal(2, first.Side);
+        Assert.DoesNotContain("event_game_switch_side", events);
+
+        // 同一阵营再次出现不重复播报。
+        state.ProcessFrame(
+            TimeSpan.FromSeconds(60),
+            Matches(StateId.RoundIngame),
+            Scores(StateId.RoundIngame),
+            new SideSignal(AttackerHit: false, DefenderHit: true, AttackerScore: 0.28, DefenderScore: 0.98));
+        Assert.DoesNotContain("event_game_switch_side", events);
+
+        // 下半场翻转到进攻方：播报一次「攻守互换」。
+        var flipped = state.ProcessFrame(
+            TimeSpan.FromSeconds(130),
+            Matches(StateId.RoundStart),
+            Scores(StateId.RoundStart),
+            new SideSignal(AttackerHit: true, DefenderHit: false, AttackerScore: 0.99, DefenderScore: 0.30));
+        Assert.Equal(1, flipped.Side);
+        Assert.Single(events, "event_game_switch_side");
+    }
+
+    [Fact]
+    public void SwitchBannerAnnouncesAndSuppressesTheFlipFallback()
+    {
+        var state = new ReporterStateMachine();
+        var events = new List<string>();
+        state.EventTriggered += events.Add;
+
+        // 先确定阵营：进攻方。
+        state.ProcessFrame(
+            TimeSpan.Zero,
+            Matches(StateId.RoundStart),
+            Scores(StateId.RoundStart),
+            new SideSignal(AttackerHit: true, DefenderHit: false, AttackerScore: 0.99, DefenderScore: 0.30));
+        Assert.DoesNotContain("event_game_switch_side", events);
+
+        // 上半场最后一回合的购买阶段命中「下回合：切换为守方」横幅：播报一次，
+        // 但不改动当前状态（仍是购买阶段）。
+        var banner = Matches(StateId.RoundStart);
+        banner[(int)StateId.GameSwitchSide] = true;
+        var withBanner = state.ProcessFrame(TimeSpan.FromSeconds(60), banner, Scores(StateId.RoundStart));
+        Assert.Equal(StateId.RoundStart, withBanner.StateId);
+        Assert.Single(events, "event_game_switch_side");
+
+        // 横幅持续显示：不重复播报。
+        state.ProcessFrame(TimeSpan.FromSeconds(61), banner, Scores(StateId.RoundStart));
+        Assert.Single(events, "event_game_switch_side");
+
+        // 下一回合阵营真正翻转：横幅已经预告过，不再重复播报。
+        var flipped = state.ProcessFrame(
+            TimeSpan.FromSeconds(130),
+            Matches(StateId.RoundStart),
+            Scores(StateId.RoundStart),
+            new SideSignal(AttackerHit: false, DefenderHit: true, AttackerScore: 0.30, DefenderScore: 0.99));
+        Assert.Equal(2, flipped.Side);
+        Assert.Single(events, "event_game_switch_side");
+    }
+
+    [Fact]
     public void SideSignalKeepsCurrentSideWhenBothLabelsAreClose()
     {
         var state = new ReporterStateMachine();
@@ -443,6 +646,36 @@ public sealed class CoreTests
         }
 
         return pixels;
+    }
+
+    private static void PaintSquare(byte[] bgra, int width, int x0, int y0, int sizeX, int sizeY)
+    {
+        for (var y = y0; y < y0 + sizeY; y++)
+        {
+            for (var x = x0; x < x0 + sizeX; x++)
+            {
+                var pixel = ((y * width) + x) * 4;
+                bgra[pixel] = 255;
+                bgra[pixel + 1] = 255;
+                bgra[pixel + 2] = 255;
+                bgra[pixel + 3] = 255;
+            }
+        }
+    }
+
+    private static void ShiftRightHalfPixel(byte[] gray)
+    {
+        var copy = (byte[])gray.Clone();
+        for (var y = 0; y < ReporterStates.FrameHeight; y++)
+        {
+            var row = y * ReporterStates.FrameWidth;
+            for (var x = ReporterStates.FrameWidth - 1; x > 0; x--)
+            {
+                gray[row + x] = (byte)((copy[row + x] + copy[row + x - 1]) / 2);
+            }
+
+            gray[row] = copy[row];
+        }
     }
 
     private static void ShiftRight(byte[] gray)

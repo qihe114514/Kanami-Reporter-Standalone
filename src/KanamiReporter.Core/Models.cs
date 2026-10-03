@@ -69,8 +69,8 @@ public sealed record DetectionResult(
     string PhaseTimingLabel = "");
 
 public sealed record MatchOffsetDetail(
-    int OffsetX,
-    int OffsetY,
+    double OffsetX,
+    double OffsetY,
     double Sum,
     double Squared,
     double Product,
@@ -79,8 +79,8 @@ public sealed record MatchOffsetDetail(
 
 public sealed record TemplateMatchDetails(
     double BestScore,
-    int BestOffsetX,
-    int BestOffsetY,
+    double BestOffsetX,
+    double BestOffsetY,
     IReadOnlyList<MatchOffsetDetail> Offsets);
 
 /// <summary>

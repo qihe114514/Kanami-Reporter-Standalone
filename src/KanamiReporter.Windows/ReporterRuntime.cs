@@ -87,7 +87,7 @@ public sealed class ReporterRuntime : IAsyncDisposable
     public void ReloadTemplates()
     {
         _engine.ReloadTemplates();
-        _logger.Info($"已重新加载 {_engine.LoadedTemplateCount} 个模板。");
+        _logger.Info($"已重新加载 {_engine.LoadedTemplateCount} 个模板、{_engine.LoadedVariantCount} 个变体。");
     }
 
     public void ResetRecognition() => _engine.Reset();

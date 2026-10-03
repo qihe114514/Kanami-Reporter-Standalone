@@ -8,7 +8,11 @@ public sealed class BuiltInResourcePack
 {
     private const string ResourceName = "KanamiReporter.App.Assets.builtin-resources.zip";
     // v2：新增购买阶段「攻方 / 守方」阵营标记模板，用于每个回合校正攻守阵营。
-    private const int PackVersion = 2;
+    // v3：新增 16:10 变体模板（round_ingame.16x10、round_start.16x10、赛点回合等），
+    //     16:10 分辨率下同名模板按最高分匹配，不再需要 16:9 模板硬扛缩放差异。
+    // v4：新增「攻守互换」模板（game_switch_side.16x10：半场最后一回合横幅
+    //     「下回合：切换为守方/攻方」），让状态机能在半场切换时播报。
+    private const int PackVersion = 4;
 
     private readonly AppPaths _paths;
     private readonly FileLogger _logger;

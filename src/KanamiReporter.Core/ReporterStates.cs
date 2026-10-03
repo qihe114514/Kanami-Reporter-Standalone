@@ -32,12 +32,25 @@ public static class ReporterStates
     public const int CaptureIntervalMilliseconds = 100;
 
     /// <summary>
-    /// 「回合开始最后5秒」语音的触发时刻：从进入购买/准备阶段算起，对应回合正式开始前的最后 5 秒。
-    /// 第一回合的准备阶段比常规回合更长，所以触发点更靠后。
+    /// 战斗阶段时长（秒）：实机录像测得战斗计时器从 01:55 倒数到 00:00，
+    /// 与「回合剩余40秒 / 剩余20秒」的触发点（115-40=75、115-20=95）一致。
     /// </summary>
-    public const int FirstRoundStartCountdownSeconds = 31;
+    public const int RoundIngameDurationSeconds = 115;
 
-    public const int RegularRoundStartCountdownSeconds = 22;
+    /// <summary>
+    /// 「回合开始最后5秒」语音的触发时刻：从进入购买/准备阶段算起，对应回合正式开始前的最后 5 秒。
+    /// 上半场第一回合和下半场第一回合的准备阶段更长，触发点更靠后。
+    ///
+    /// 数值来源：16:10 实机录像 1 秒步长逐帧回放测量——
+    /// 购买阶段有独立倒计时（00:05→00:00 即回合正式开始）：
+    /// 常规回合从进入购买阶段到战斗开始约 25 秒，倒计时 00:05 出现在第 20 秒；
+    /// 两个半场首回合约 39 秒，对应第 34 秒。
+    /// </summary>
+    public const int FirstRoundStartCountdownSeconds = 34;
+
+    public const int RegularRoundStartCountdownSeconds = 20;
+
+    /// <summary>加时回合的准备阶段长度尚未实测，沿用较长的保守值。</summary>
     public const int OvertimeRoundStartCountdownSeconds = 37;
 
     public static readonly string[] Names =
@@ -224,11 +237,15 @@ public static class ReporterStates
         "event_overtime_round"
     };
 
+    /// <summary>
+    /// 回合结构：1-9 为上半场，第 10 回合开始下半场（9 回合制），第 19 回合起为加时。
+    /// 两个半场的首回合准备阶段都更长，使用同一组「首回合」计时。
+    /// </summary>
     public static int GetRoundStartCountdownSeconds(int roundNumber) =>
         roundNumber switch
         {
-            1 => FirstRoundStartCountdownSeconds,
-            11 => OvertimeRoundStartCountdownSeconds,
+            1 or 10 => FirstRoundStartCountdownSeconds,
+            19 => OvertimeRoundStartCountdownSeconds,
             _ => RegularRoundStartCountdownSeconds
         };
     public static string GetName(StateId stateId) => Names[(int)stateId];

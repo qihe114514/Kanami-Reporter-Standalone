@@ -44,15 +44,20 @@ public partial class MainWindow
         _settings.LastUpdateCheckUtc = DateTimeOffset.UtcNow;
         await _settingsStore.SaveAsync(_settings);
 
+        // 直连不通时更新服务会自动改走加速镜像，这里把实际用的路由告诉用户。
+        var routeHint = _updateService.LastRequestUsedMirror
+            ? $"（已通过 {_updateService.LastRoute} 加速）"
+            : string.Empty;
+
         if (_availableUpdate.IsUpdateAvailable)
         {
             UpdateStatusText.Text =
-                $"发现新版本 {_availableUpdate.LatestVersion}。{Environment.NewLine}{_availableUpdate.ReleaseNotes}";
+                $"发现新版本 {_availableUpdate.LatestVersion}{routeHint}。{Environment.NewLine}{_availableUpdate.ReleaseNotes}";
             DownloadUpdateButton.IsEnabled = true;
         }
         else
         {
-            UpdateStatusText.Text = showNoUpdateMessage ? "当前已经是最新版本。" : string.Empty;
+            UpdateStatusText.Text = showNoUpdateMessage ? $"当前已经是最新版本。{routeHint}" : string.Empty;
             DownloadUpdateButton.IsEnabled = false;
         }
     }
@@ -69,7 +74,10 @@ public partial class MainWindow
             DownloadUpdateButton.IsEnabled = false;
             UpdateStatusText.Text = "正在下载更新…";
             var installer = await _updateService.DownloadAsync(_availableUpdate);
-            UpdateStatusText.Text = "下载完成，正在启动安装器…";
+            var routeHint = _updateService.LastRequestUsedMirror
+                ? $"（经 {_updateService.LastRoute} 加速）"
+                : string.Empty;
+            UpdateStatusText.Text = $"下载完成{routeHint}，正在启动安装器…";
             Process.Start(new ProcessStartInfo
             {
                 FileName = installer,

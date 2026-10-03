@@ -4,8 +4,12 @@ public sealed class ReporterStateMachine
 {
     private const double StateSwitchHysteresis = 0.03;
     private static readonly TimeSpan DuplicateRoundStartWindow = TimeSpan.FromSeconds(10);
-    private const int RoundIngameDurationSeconds = 115;
+    private const int RoundIngameDurationSeconds = ReporterStates.RoundIngameDurationSeconds;
     private const int BombPlantedDurationSeconds = 45;
+
+    /// <summary>「剩余40秒 / 剩余20秒」语音在战斗阶段剩余多少秒时触发。</summary>
+    private const int RoundIngameWarningSeconds40 = 40;
+    private const int RoundIngameWarningSeconds20 = 20;
 
     /// <summary>两侧阵营标签同时命中时，需要领先这个分数才认为阵营确实是这一侧。</summary>
     private const double SideScoreMargin = 0.03;
@@ -50,6 +54,7 @@ public sealed class ReporterStateMachine
     private bool _roundLast40sTriggered;
     private bool _roundLast20sTriggered;
     private bool _startLast5sTriggered;
+    private bool _sideSwitchAnnounced;
 
     public event Action<string>? EventTriggered;
 
@@ -103,20 +108,35 @@ public sealed class ReporterStateMachine
 
         if (_currentStateId == StateId.RoundStart && !_startLast5sTriggered)
         {
-            if ((_currentRound == 1 && _currentStateTime >= TimeSpan.FromSeconds(ReporterStates.FirstRoundStartCountdownSeconds)) ||
-                (_currentRound == 11 && _currentStateTime >= TimeSpan.FromSeconds(ReporterStates.OvertimeRoundStartCountdownSeconds)) ||
-                (_currentRound != 1 && _currentRound != 11 && _currentStateTime >= TimeSpan.FromSeconds(ReporterStates.RegularRoundStartCountdownSeconds)))
+            var countdownSeconds = ReporterStates.GetRoundStartCountdownSeconds(_currentRound);
+            if (_currentStateTime >= TimeSpan.FromSeconds(countdownSeconds))
             {
                 Trigger(EventRoundStartLast5s, true, () => _startLast5sTriggered = true);
             }
         }
 
-        if (_currentStateId == StateId.RoundIngame && _currentStateTime >= TimeSpan.FromSeconds(75) && !_roundLast40sTriggered)
+        // 「攻守互换」：半场的最后一个回合，购买阶段横幅会变成「下回合：切换为守方/攻方」。
+        // 它只是横幅上的一次性提示，不是独立界面，所以不参与状态竞争（不改变当前状态），
+        // 命中就播报一次；同时记下"已经预告过"，避免下一回合阵营真正翻转时重复播报。
+        if (matches[(int)StateId.GameSwitchSide])
+        {
+            if (!_sideSwitchAnnounced)
+            {
+                _sideSwitchAnnounced = true;
+                Trigger(EventGameSwitchSide);
+            }
+        }
+
+        if (_currentStateId == StateId.RoundIngame &&
+            _currentStateTime >= TimeSpan.FromSeconds(RoundIngameDurationSeconds - RoundIngameWarningSeconds40) &&
+            !_roundLast40sTriggered)
         {
             Trigger(EventRoundIngameLast40s, true, () => _roundLast40sTriggered = true);
         }
 
-        if (_currentStateId == StateId.RoundIngame && _currentStateTime >= TimeSpan.FromSeconds(95) && !_roundLast20sTriggered)
+        if (_currentStateId == StateId.RoundIngame &&
+            _currentStateTime >= TimeSpan.FromSeconds(RoundIngameDurationSeconds - RoundIngameWarningSeconds20) &&
+            !_roundLast20sTriggered)
         {
             Trigger(EventRoundIngameLast20s, true, () => _roundLast20sTriggered = true);
         }
@@ -128,7 +148,8 @@ public sealed class ReporterStateMachine
 
         for (var i = 0; i < ReporterStates.Count; i++)
         {
-            if (!matches[i] || scores[i] <= bestMatchingScore)
+            // 攻守互换只是一次性提示（见上），不作为停留状态参与竞争。
+            if (i == (int)StateId.GameSwitchSide || !matches[i] || scores[i] <= bestMatchingScore)
             {
                 continue;
             }
@@ -175,6 +196,9 @@ public sealed class ReporterStateMachine
     /// <summary>
     /// 用购买阶段横幅上的「攻方 / 守方」标签校正阵营。
     /// 只有一侧明显命中才改阵营，标签淡入淡出或两侧接近时保持原值。
+    ///
+    /// 阵营从攻方翻到守方（或反过来）时播报「攻守互换」：现在的游戏版本在半场切换时
+    /// 不显示专门的互换界面，横幅标签的翻转是最可靠的信号（每回合都会校正，翻转只发生在下半场开局）。
     /// </summary>
     private void UpdateSide(SideSignal signal)
     {
@@ -185,7 +209,26 @@ public sealed class ReporterStateMachine
             return;
         }
 
-        _currentSide = attacker ? 1 : 2;
+        var side = attacker ? 1 : 2;
+        if (_currentSide == side)
+        {
+            return;
+        }
+
+        // 第一次拿到阵营（0 → 攻/守）不算互换，只有已知阵营后真的翻转才播报。
+        // 横幅已经预告过（上一条）就不重复播：横幅版是主要路径，标签翻转只在
+        // 没有「攻守互换」模板（例如 16:9 未提供该模板）时兜底。
+        var hadKnownSide = _currentSide != 0;
+        _currentSide = side;
+        if (hadKnownSide)
+        {
+            if (!_sideSwitchAnnounced)
+            {
+                Trigger(EventGameSwitchSide);
+            }
+
+            _sideSwitchAnnounced = false;
+        }
     }
 
     private void TriggerForState(
@@ -290,17 +333,24 @@ public sealed class ReporterStateMachine
             case StateId.GameEndWin:
                 Trigger(EventGameEndWin);
                 ResetRoundTriggers();
+                ResetMatch();
                 break;
             case StateId.GameEndLose:
                 Trigger(EventGameEndLose);
                 ResetRoundTriggers();
+                ResetMatch();
                 break;
             case StateId.GameEndDraw:
                 Trigger(EventGameEndDraw);
                 ResetRoundTriggers();
+                ResetMatch();
                 break;
             case StateId.GameChooseCharacter:
                 Trigger(EventGameChooseCharacter);
+
+                // 选人界面只在对局开始前出现：即使上一局的结算界面被漏掉，这里也要把回合数清零，
+                // 否则新对局的回合会从上一局的数字继续往上加。
+                ResetMatch();
                 break;
             case StateId.GameSwitchSide:
                 Trigger(EventGameSwitchSide);
@@ -381,6 +431,17 @@ public sealed class ReporterStateMachine
         _roundLast40sTriggered = false;
         _roundLast20sTriggered = false;
         _startLast5sTriggered = false;
+    }
+
+    /// <summary>
+    /// 一局结束（或新对局开始时）：回合数清零，避免下一局的回合号接着上一局继续数。
+    /// 阵营保留——下半场/加时的阵营由每回合的横幅持续校正。
+    /// </summary>
+    private void ResetMatch()
+    {
+        _currentRound = 0;
+        _lastRoundStartEnteredAt = null;
+        _sideSwitchAnnounced = false;
     }
 }
 
