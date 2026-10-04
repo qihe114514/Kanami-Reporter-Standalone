@@ -17,21 +17,22 @@
     <LangVersion>latest</LangVersion>
     <AssemblyName>KanamiReporter</AssemblyName>
     <RootNamespace>KanamiReporter.App</RootNamespace>
-    <Version>1.0.9</Version>
-    <AssemblyVersion>1.0.9.0</AssemblyVersion>
-    <FileVersion>1.0.9.0</FileVersion>
+    <Version>1.1.0</Version>
+    <AssemblyVersion>1.1.0.0</AssemblyVersion>
+    <FileVersion>1.1.0.0</FileVersion>
     <Authors>Yiyan</Authors>
     <Product>香奈美x黑潮爆破</Product>
     <Copyright>GPL-2.0-or-later</Copyright>
   </PropertyGroup>
   <ItemGroup>
-    <FrameworkReference Include="Microsoft.WindowsDesktop.App.WindowsForms" />
-  </ItemGroup>
-  <ItemGroup>
     <ProjectReference Include="..\KanamiReporter.Core\KanamiReporter.Core.csproj" />
     <ProjectReference Include="..\KanamiReporter.Windows\KanamiReporter.Windows.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <PackageReference Include="H.NotifyIcon.WinUI" Version="2.3.2" />
+    <!-- H.NotifyIcon 硬依赖 WindowsAppSDK umbrella；项目用拆分包，这里显式引用 umbrella 只为满足
+         依赖图（阻止旧版 1.6 被传递解析），ExcludeAssets=build 防止它的 targets 与拆分包重复导入。 -->
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.5.1" ExcludeAssets="build" />
     <PackageReference Include="Microsoft.WindowsAppSDK.WinUI" Version="2.3.9" />
     <PackageReference Include="Microsoft.WindowsAppSDK.Runtime" Version="2.5.1" />
     <PackageReference Include="Microsoft.WindowsAppSDK.InteractiveExperiences" Version="2.1.9" />

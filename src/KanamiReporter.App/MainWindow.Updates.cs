@@ -5,14 +5,12 @@ namespace KanamiReporter.App;
 
 public partial class MainWindow
 {
+    /// <summary>
+    /// 主界面打开后自动检查一次更新：发现新版本时跳到「关于与日志」页展示更新信息，
+    /// 没有新版本则完全静默（连检查进度都不显示，避免打扰）。
+    /// </summary>
     private async Task CheckForUpdatesInBackgroundAsync()
     {
-        if (_settings.LastUpdateCheckUtc is DateTimeOffset last &&
-            DateTimeOffset.UtcNow - last < TimeSpan.FromHours(24))
-        {
-            return;
-        }
-
         try
         {
             await CheckForUpdatesAsync(showNoUpdateMessage: false);
@@ -38,7 +36,12 @@ public partial class MainWindow
 
     private async Task CheckForUpdatesAsync(bool showNoUpdateMessage)
     {
-        UpdateStatusText.Text = "正在检查更新…";
+        // 后台自动检查不显示进度，避免每次启动都在界面上闪一条"正在检查更新…"。
+        if (showNoUpdateMessage)
+        {
+            UpdateStatusText.Text = "正在检查更新…";
+        }
+
         var currentVersion = GetType().Assembly.GetName().Version?.ToString(3) ?? "1.0.0";
         _availableUpdate = await _updateService.CheckAsync(currentVersion);
         _settings.LastUpdateCheckUtc = DateTimeOffset.UtcNow;
@@ -54,6 +57,12 @@ public partial class MainWindow
             UpdateStatusText.Text =
                 $"发现新版本 {_availableUpdate.LatestVersion}{routeHint}。{Environment.NewLine}{_availableUpdate.ReleaseNotes}";
             DownloadUpdateButton.IsEnabled = true;
+
+            // 自动检查发现新版本：把用户带到更新所在的「关于与日志」页。
+            if (!showNoUpdateMessage)
+            {
+                ShowView(AboutNavItem);
+            }
         }
         else
         {

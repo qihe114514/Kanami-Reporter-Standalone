@@ -19,3 +19,9 @@ The application icon uses the official Kanami "MVP" emote from the Strinova / Âç
 - Windows icon: `src/KanamiReporter.App/Assets/AppIcon.ico`
 
 The character artwork and emote remain the property of their respective rights holders. The repository's GPL-2.0-or-later license applies to the software source code and does not grant rights to the third-party artwork.
+
+## NuGet packages
+
+- [H.NotifyIcon.WinUI](https://www.nuget.org/packages/H.NotifyIcon.WinUI) ‚Äî system tray icon support for the WinUI 3 interface (replaced the previous WinForms `NotifyIcon` tray implementation).
+  - Project: https://github.com/HavenDV/H.NotifyIcon
+  - License: MIT

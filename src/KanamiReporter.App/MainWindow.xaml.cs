@@ -15,7 +15,6 @@ using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.Graphics;
-using WinForms = System.Windows.Forms;
 
 namespace KanamiReporter.App;
 
@@ -36,7 +35,6 @@ public partial class MainWindow : Window
     private readonly GitHubUpdateService _updateService;
     private readonly FileLogger _logger;
     private readonly bool _startHidden;
-    private readonly WinForms.NotifyIcon _trayIcon = new();
     private readonly SemaphoreSlim _dialogGate = new(1, 1);
     private readonly ObservableCollection<string> _debugMessages = new();
     private readonly ObservableCollection<TemplateScoreItem> _templateScores = new();
@@ -96,10 +94,27 @@ public partial class MainWindow : Window
         RootGrid.ActualThemeChanged += (_, _) => ApplyTitleBarColors();
 
         ConfigureWindow();
+        InitializeTrayIcon();
         InitializeStaticLists();
         InitializeSettingsControls();
-        InitializeTrayIcon();
         ShowView(RunNavItem);
+    }
+
+    /// <summary>
+    /// 托盘交互（图标和菜单在 XAML 里声明）：tooltip 走内层 core 对象；
+    /// 单击显示主窗口经 LeftClickCommand 接线，WinUI 版 TaskbarIcon 没有 routed events。
+    /// </summary>
+    private void InitializeTrayIcon()
+    {
+        TrayShowCommand = new RelayCommand(_ => ShowFromTray());
+        try
+        {
+            TrayIcon.TrayIcon.ToolTip = "香奈美x黑潮爆破";
+        }
+        catch (Exception exception)
+        {
+            _logger.Warning($"设置托盘提示失败：{exception.Message}");
+        }
     }
 
     private void ConfigureWindow()
@@ -271,7 +286,7 @@ public partial class MainWindow : Window
         _scoreRefreshTimer?.Stop();
         _hotkey?.Dispose();
         _hotkey = null;
-        _trayIcon.Dispose();
+        TrayIcon.Dispose();
         (Application.Current as App)?.Shutdown();
     }
 
@@ -306,41 +321,6 @@ public partial class MainWindow : Window
         _runtime.AudioVolume = _settings.AudioVolume;
         UpdateMatchSummary();
         _updatingControls = false;
-    }
-
-    private void InitializeTrayIcon()
-    {
-        var menu = new WinForms.ContextMenuStrip();
-        menu.Items.Add("显示主窗口", null, (_, _) => ShowFromTray());
-        menu.Items.Add("开始 / 停止识别", null, async (_, _) => await ToggleRecognitionAsync());
-        menu.Items.Add(new WinForms.ToolStripSeparator());
-        menu.Items.Add("退出", null, (_, _) => ExitApplication());
-
-        _trayIcon.Text = "香奈美x黑潮爆破";
-        // 托盘图标用应用自身的图标；Assets 缺失时退回从 exe 提取，再不行才是系统占位图标。
-        var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "AppIcon.ico");
-        if (File.Exists(iconPath))
-        {
-            _trayIcon.Icon = new System.Drawing.Icon(iconPath);
-        }
-        else
-        {
-            try
-            {
-                _trayIcon.Icon = string.IsNullOrWhiteSpace(Environment.ProcessPath)
-                    ? System.Drawing.SystemIcons.Application
-                    : System.Drawing.Icon.ExtractAssociatedIcon(Environment.ProcessPath);
-            }
-            catch (Exception exception)
-            {
-                _logger.Warning($"提取托盘图标失败：{exception.Message}");
-                _trayIcon.Icon = System.Drawing.SystemIcons.Application;
-            }
-        }
-
-        _trayIcon.ContextMenuStrip = menu;
-        _trayIcon.Visible = true;
-        _trayIcon.DoubleClick += (_, _) => ShowFromTray();
     }
 
     private void StartCaptureAutoRefresh()
@@ -688,7 +668,7 @@ public partial class MainWindow : Window
 
         SetText(
             DebugStateDurationText,
-            $"阶段计时：{result.StateDuration.TotalSeconds:0.0} 秒");
+            $"阶段计时：{result.StateDuration.TotalSeconds:0} 秒");
         SetText(
             GameCountdownText,
             result.EstimatedPhaseRemaining is { } remaining ? FormatCountdown(remaining) : "--:--");
@@ -727,8 +707,8 @@ public partial class MainWindow : Window
             value = TimeSpan.Zero;
         }
 
-        // 识别每 100 毫秒刷新一次，保留一位小数才能跟着刷新走，不会一秒一跳。
-        return $"{value.TotalSeconds:0.0} 秒";
+        // 只显示整数秒：SetText 已做去重，显示值每秒才变化一次。
+        return $"{Math.Floor(value.TotalSeconds):0} 秒";
     }
 
     private static string BuildNextEventText(DetectionResult result)
@@ -738,7 +718,7 @@ public partial class MainWindow : Window
             var threshold = ReporterStates.GetRoundStartCountdownSeconds(result.RoundNumber);
             var seconds = threshold - result.StateDuration.TotalSeconds;
             return seconds > 0
-                ? $"倒计时语音：{seconds:0.0} 秒后触发"
+                ? $"倒计时语音：{Math.Floor(seconds):0} 秒后触发"
                 : "倒计时语音：已触发";
         }
 
@@ -747,12 +727,12 @@ public partial class MainWindow : Window
             var seconds = result.StateDuration.TotalSeconds;
             if (seconds < 75)
             {
-                return $"剩余40秒语音：{75 - seconds:0.0} 秒后触发";
+                return $"剩余40秒语音：{Math.Floor(75 - seconds):0} 秒后触发";
             }
 
             if (seconds < 95)
             {
-                return $"剩余20秒语音：{95 - seconds:0.0} 秒后触发";
+                return $"剩余20秒语音：{Math.Floor(95 - seconds):0} 秒后触发";
             }
 
             return "剩余20秒语音：已触发";
@@ -1077,13 +1057,11 @@ public partial class MainWindow : Window
 
     private void HideToTray()
     {
-        _trayIcon.Visible = true;
         AppWindow.Hide();
     }
 
     private void ShowFromTray()
     {
-        _trayIcon.Visible = true;
         AppWindow.Show();
 
         if (AppWindow.Presenter is OverlappedPresenter presenter &&
@@ -1094,6 +1072,15 @@ public partial class MainWindow : Window
 
         Activate();
     }
+
+    /// <summary>托盘单击显示主窗口：WinUI 版 TaskbarIcon 没有 routed events，只能经 ICommand 接线（见 XAML）。</summary>
+    public System.Windows.Input.ICommand TrayShowCommand { get; private set; } = null!;
+
+    private void TrayShow_Click(object sender, RoutedEventArgs e) => ShowFromTray();
+
+    private async void TrayToggle_Click(object sender, RoutedEventArgs e) => await ToggleRecognitionAsync();
+
+    private void TrayExit_Click(object sender, RoutedEventArgs e) => ExitApplication();
 
     private void ExitApplication()
     {

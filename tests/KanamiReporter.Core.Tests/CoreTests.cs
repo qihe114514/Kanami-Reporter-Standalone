@@ -274,7 +274,7 @@ public sealed class CoreTests
 
         state.ProcessFrame(TimeSpan.Zero, Matches(StateId.RoundStart), Scores(StateId.RoundStart));
         var beforeTrigger = state.ProcessFrame(
-            TimeSpan.FromSeconds(33),
+            TimeSpan.FromSeconds(35),
             Matches(StateId.RoundStart),
             Scores(StateId.RoundStart));
 
@@ -284,7 +284,7 @@ public sealed class CoreTests
         Assert.Equal(1, beforeTrigger.RoundNumber);
 
         state.ProcessFrame(
-            TimeSpan.FromSeconds(34),
+            TimeSpan.FromSeconds(36),
             Matches(StateId.RoundStart),
             Scores(StateId.RoundStart));
 
@@ -294,7 +294,8 @@ public sealed class CoreTests
     [Fact]
     public void StateMachineTriggersRegularRoundCountdownAtMeasuredTime()
     {
-        // 常规回合购买阶段实测约 25 秒，「最后5秒」在进入购买阶段 20 秒后触发。
+        // 实机实测：常规回合在 22 秒触发时游戏内购买倒计时显示 00:07，
+        // 00:05 出现在第 22 秒——播报要卡在游戏内剩 5 秒的时刻。
         var state = new ReporterStateMachine();
         var events = new List<string>();
         state.EventTriggered += events.Add;
@@ -308,14 +309,14 @@ public sealed class CoreTests
         Assert.Equal(2, secondRoundStart.RoundNumber);
 
         var beforeTrigger = state.ProcessFrame(
-            TimeSpan.FromSeconds(39),
+            TimeSpan.FromSeconds(41),
             Matches(StateId.RoundStart),
             Scores(StateId.RoundStart));
         Assert.DoesNotContain("event_round_start_last_5s", events);
         Assert.Equal(TimeSpan.FromSeconds(1), beforeTrigger.EstimatedPhaseRemaining);
 
         state.ProcessFrame(
-            TimeSpan.FromSeconds(40),
+            TimeSpan.FromSeconds(42),
             Matches(StateId.RoundStart),
             Scores(StateId.RoundStart));
 
@@ -323,11 +324,12 @@ public sealed class CoreTests
     }
 
     [Fact]
-    public void SecondHalfFirstRoundUsesFirstRoundCountdown()
+    public void SecondHalfFirstRoundUsesLaterCountdown()
     {
-        // 第 10 回合是下半场首回合，准备阶段与上半场首回合一样长。
+        // 第 10 回合是下半场首回合：换边过场期间 round_start 已提前命中，
+        // 触发点比上半场首回合更靠后；第 11 回合起回到常规计时。
         Assert.Equal(
-            ReporterStates.FirstRoundStartCountdownSeconds,
+            ReporterStates.SecondHalfFirstRoundStartCountdownSeconds,
             ReporterStates.GetRoundStartCountdownSeconds(10));
         Assert.Equal(
             ReporterStates.FirstRoundStartCountdownSeconds,
@@ -502,7 +504,7 @@ public sealed class CoreTests
     }
 
     [Fact]
-    public void SwitchBannerAnnouncesAndSuppressesTheFlipFallback()
+    public void SwitchBannerDoesNotAnnounceUntilSideActuallyFlips()
     {
         var state = new ReporterStateMachine();
         var events = new List<string>();
@@ -516,19 +518,19 @@ public sealed class CoreTests
             new SideSignal(AttackerHit: true, DefenderHit: false, AttackerScore: 0.99, DefenderScore: 0.30));
         Assert.DoesNotContain("event_game_switch_side", events);
 
-        // 上半场最后一回合的购买阶段命中「下回合：切换为守方」横幅：播报一次，
-        // 但不改动当前状态（仍是购买阶段）。
+        // 上半场最后一回合的购买阶段命中「下回合：切换为守方」横幅：
+        // 此时离攻防转换还隔着一整个回合，只作预告，不播报，也不改动当前状态。
         var banner = Matches(StateId.RoundStart);
         banner[(int)StateId.GameSwitchSide] = true;
         var withBanner = state.ProcessFrame(TimeSpan.FromSeconds(60), banner, Scores(StateId.RoundStart));
         Assert.Equal(StateId.RoundStart, withBanner.StateId);
-        Assert.Single(events, "event_game_switch_side");
+        Assert.DoesNotContain("event_game_switch_side", events);
 
-        // 横幅持续显示：不重复播报。
+        // 横幅持续显示：依旧不播报。
         state.ProcessFrame(TimeSpan.FromSeconds(61), banner, Scores(StateId.RoundStart));
-        Assert.Single(events, "event_game_switch_side");
+        Assert.DoesNotContain("event_game_switch_side", events);
 
-        // 下一回合阵营真正翻转：横幅已经预告过，不再重复播报。
+        // 下一回合阵营真正翻转（下半场开局）：这时才播报一次「攻守互换」。
         var flipped = state.ProcessFrame(
             TimeSpan.FromSeconds(130),
             Matches(StateId.RoundStart),

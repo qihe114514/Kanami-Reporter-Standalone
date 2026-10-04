@@ -29,7 +29,8 @@ public static class ReporterStates
     public const int FrameBytes = FrameWidth * FrameHeight * 4;
     public const int MaxTemplatePixels = 262144;
     public const double DefaultThreshold = 0.90;
-    public const int CaptureIntervalMilliseconds = 100;
+    /// <summary>采集与识别节拍：约 15 帧/秒（66 毫秒），帧率越高横幅状态的捕捉越及时。</summary>
+    public const int CaptureIntervalMilliseconds = 66;
 
     /// <summary>
     /// 战斗阶段时长（秒）：实机录像测得战斗计时器从 01:55 倒数到 00:00，
@@ -38,17 +39,26 @@ public static class ReporterStates
     public const int RoundIngameDurationSeconds = 115;
 
     /// <summary>
-    /// 「回合开始最后5秒」语音的触发时刻：从进入购买/准备阶段算起，对应回合正式开始前的最后 5 秒。
-    /// 上半场第一回合和下半场第一回合的准备阶段更长，触发点更靠后。
+    /// 「回合开始最后5秒」语音的触发时刻：从识别到购买/准备阶段（round_start 模板命中）算起，
+    /// 对应游戏内购买倒计时走到 00:05 的时刻——语音播完「GO」正好赶上回合正式开始。
     ///
-    /// 数值来源：16:10 实机录像 1 秒步长逐帧回放测量——
-    /// 购买阶段有独立倒计时（00:05→00:00 即回合正式开始）：
-    /// 常规回合从进入购买阶段到战斗开始约 25 秒，倒计时 00:05 出现在第 20 秒；
-    /// 两个半场首回合约 39 秒，对应第 34 秒。
+    /// round_start 模板的命中点比游戏内倒计时起点略有偏移，因此这些秒数都是
+    /// 「模板命中 → 游戏内剩 5 秒」的实测差值，不等于购买阶段的真实时长。
+    ///
+    /// 数值来源（2026-10 自定义房间实机实测 + 网上攻略：常规购买阶段 30 秒）：
+    /// 常规回合在 22 秒触发时游戏内显示 00:07 → 00:05 出现在第 22 秒（v1.0.9 的 20 秒会提前 2 秒）；
+    /// 上半场首回合 34 秒时同样显示 00:07 → 修正为 36 秒；
+    /// 下半场首回合在换边过场期间 round_start 就已命中，34 秒时游戏内才显示 00:20 → 修正为 49 秒。
     /// </summary>
-    public const int FirstRoundStartCountdownSeconds = 34;
+    public const int FirstRoundStartCountdownSeconds = 36;
 
-    public const int RegularRoundStartCountdownSeconds = 20;
+    public const int RegularRoundStartCountdownSeconds = 22;
+
+    /// <summary>
+    /// 下半场首回合（第 10 回合）：第 9 回合结算后换边过场里 round_start 模板就已提前命中，
+    /// 状态时长里多算了整段过场，触发点比上半场首回合更靠后。
+    /// </summary>
+    public const int SecondHalfFirstRoundStartCountdownSeconds = 49;
 
     /// <summary>加时回合的准备阶段长度尚未实测，沿用较长的保守值。</summary>
     public const int OvertimeRoundStartCountdownSeconds = 37;
@@ -239,12 +249,13 @@ public static class ReporterStates
 
     /// <summary>
     /// 回合结构：1-9 为上半场，第 10 回合开始下半场（9 回合制），第 19 回合起为加时。
-    /// 两个半场的首回合准备阶段都更长，使用同一组「首回合」计时。
+    /// 两个半场的首回合准备阶段都比常规回合长；下半场首回合还要额外计入换边过场。
     /// </summary>
     public static int GetRoundStartCountdownSeconds(int roundNumber) =>
         roundNumber switch
         {
-            1 or 10 => FirstRoundStartCountdownSeconds,
+            1 => FirstRoundStartCountdownSeconds,
+            10 => SecondHalfFirstRoundStartCountdownSeconds,
             19 => OvertimeRoundStartCountdownSeconds,
             _ => RegularRoundStartCountdownSeconds
         };

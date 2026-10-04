@@ -5,6 +5,7 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:local="using:KanamiReporter.App"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:tb="using:H.NotifyIcon"
     mc:Ignorable="d"
     Title="香奈美x黑潮爆破">
 
@@ -724,7 +725,7 @@
                                 <TextBlock Style="{StaticResource SectionHeader}" Text="运行行为" />
                                 <CheckBox x:Name="StartWithWindowsCheck" Content="开机自动启动" />
                                 <CheckBox x:Name="MinimizeToTrayCheck" Content="最小化到系统托盘" />
-                                <CheckBox x:Name="CheckUpdatesCheck" Content="每天检查一次更新" />
+                                <CheckBox x:Name="CheckUpdatesCheck" Content="启动时自动检查更新" />
                             </StackPanel>
                         </Border>
 
@@ -829,5 +830,22 @@
                 </ScrollViewer>
             </Grid>
         </NavigationView>
+
+        <!-- 系统托盘（H.NotifyIcon.WinUI）：单击图标显示主窗口，右键弹出菜单。
+             WinUI 版没有 routed events，单击经 LeftClickCommand 接线。 -->
+        <tb:TaskbarIcon
+            x:Name="TrayIcon"
+            IconSource="ms-appx:///Assets/AppIcon.ico"
+            LeftClickCommand="{x:Bind TrayShowCommand}"
+            NoLeftClickDelay="True">
+            <tb:TaskbarIcon.ContextFlyout>
+                <MenuFlyout>
+                    <MenuFlyoutItem Click="TrayShow_Click" Text="显示主窗口" />
+                    <MenuFlyoutItem Click="TrayToggle_Click" Text="开始 / 停止识别" />
+                    <MenuFlyoutSeparator />
+                    <MenuFlyoutItem Click="TrayExit_Click" Text="退出" />
+                </MenuFlyout>
+            </tb:TaskbarIcon.ContextFlyout>
+        </tb:TaskbarIcon>
     </Grid>
 </Window>

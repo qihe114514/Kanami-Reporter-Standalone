@@ -54,7 +54,6 @@ public sealed class ReporterStateMachine
     private bool _roundLast40sTriggered;
     private bool _roundLast20sTriggered;
     private bool _startLast5sTriggered;
-    private bool _sideSwitchAnnounced;
 
     public event Action<string>? EventTriggered;
 
@@ -115,17 +114,10 @@ public sealed class ReporterStateMachine
             }
         }
 
-        // 「攻守互换」：半场的最后一个回合，购买阶段横幅会变成「下回合：切换为守方/攻方」。
-        // 它只是横幅上的一次性提示，不是独立界面，所以不参与状态竞争（不改变当前状态），
-        // 命中就播报一次；同时记下"已经预告过"，避免下一回合阵营真正翻转时重复播报。
-        if (matches[(int)StateId.GameSwitchSide])
-        {
-            if (!_sideSwitchAnnounced)
-            {
-                _sideSwitchAnnounced = true;
-                Trigger(EventGameSwitchSide);
-            }
-        }
+        // 「下回合：切换为守方/攻方」横幅只出现在上半场最后一个回合的购买阶段，
+        // 是对下一回合的预告——此时离真正的攻防转换还隔着一整个回合，不能在这里播报。
+        // 播报推迟到阵营标签真正翻转的时刻（见 UpdateSide）；
+        // 该状态不参与状态竞争（见下方状态选择循环），横幅本身不改变当前状态。
 
         if (_currentStateId == StateId.RoundIngame &&
             _currentStateTime >= TimeSpan.FromSeconds(RoundIngameDurationSeconds - RoundIngameWarningSeconds40) &&
@@ -198,7 +190,8 @@ public sealed class ReporterStateMachine
     /// 只有一侧明显命中才改阵营，标签淡入淡出或两侧接近时保持原值。
     ///
     /// 阵营从攻方翻到守方（或反过来）时播报「攻守互换」：现在的游戏版本在半场切换时
-    /// 不显示专门的互换界面，横幅标签的翻转是最可靠的信号（每回合都会校正，翻转只发生在下半场开局）。
+    /// 不显示专门的互换界面，横幅标签的翻转是最可靠的信号（每回合都会校正，
+    /// 翻转只发生在下半场开局）。「下回合：切换」预告横幅不播报（见 ProcessFrame）。
     /// </summary>
     private void UpdateSide(SideSignal signal)
     {
@@ -216,18 +209,11 @@ public sealed class ReporterStateMachine
         }
 
         // 第一次拿到阵营（0 → 攻/守）不算互换，只有已知阵营后真的翻转才播报。
-        // 横幅已经预告过（上一条）就不重复播：横幅版是主要路径，标签翻转只在
-        // 没有「攻守互换」模板（例如 16:9 未提供该模板）时兜底。
         var hadKnownSide = _currentSide != 0;
         _currentSide = side;
         if (hadKnownSide)
         {
-            if (!_sideSwitchAnnounced)
-            {
-                Trigger(EventGameSwitchSide);
-            }
-
-            _sideSwitchAnnounced = false;
+            Trigger(EventGameSwitchSide);
         }
     }
 
@@ -352,9 +338,6 @@ public sealed class ReporterStateMachine
                 // 否则新对局的回合会从上一局的数字继续往上加。
                 ResetMatch();
                 break;
-            case StateId.GameSwitchSide:
-                Trigger(EventGameSwitchSide);
-                break;
             case StateId.RoundIngame:
                 if (_currentSide == 1)
                 {
@@ -441,7 +424,6 @@ public sealed class ReporterStateMachine
     {
         _currentRound = 0;
         _lastRoundStartEnteredAt = null;
-        _sideSwitchAnnounced = false;
     }
 }
 
