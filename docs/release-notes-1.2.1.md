@@ -1,4 +1,4 @@
-# 香奈美x黑潮爆破 · 手机版 v1.2.0
+# 香奈美x黑潮爆破 · 手机版 v1.2.1
 
 手机端首次公开发布。
 
@@ -32,12 +32,12 @@
 
 ## 安装
 
-下载 `KanamiReporter-1.2.0-qihe-release.apk` 安装即可。
+下载 `KanamiReporter-1.2.1-qihe-release.apk` 安装即可。
 
 如果之前装过 debug 版或其它签名的包，需要先卸载再装。
 
 ## 校验
 
 ```
-SHA256: CBD1064A1A326D72576F32BA3234B3E5147D756E70B44974D6DE435F61D465E3
+SHA256: CCB82446B16F62B1185396ACF99B079FD3D877BBA2C12D7491E1C4CE13AD89D7
 ```
