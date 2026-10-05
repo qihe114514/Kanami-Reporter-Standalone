@@ -216,18 +216,18 @@ class MainActivity : ComponentActivity() {
             //
             // fadeDistance 就是"模糊区域从边缘伸进来多远"，用物理尺寸直接指定，
             // 不再用模糊带高度的比例（那样一调高度，模糊位置就跟着漂）。
-            //   顶部 —— 正好到标题文字的上边缘，内容一和标题重叠就开始虚化；
-            //   底部 —— 越过底栏顶边再往上伸 40dp，让内容进入底栏之前就已经虚化。
+            // 顶上这一条会盖到标题文字下方一点，但模糊带画在标题**之下**，所以标题本身始终清晰，
+            // 只有滚动内容滑进这块区域时才被虚化。
             ProgressiveBlurEdge(
                 backdrop = edgeBackdrop,
                 fromTop = true,
-                fadeDistance = statusBarHeight + 16.dp,
+                fadeDistance = statusBarHeight + 56.dp,
                 modifier = Modifier.align(Alignment.TopCenter)
             )
             ProgressiveBlurEdge(
                 backdrop = edgeBackdrop,
                 fromTop = false,
-                fadeDistance = navigationBarHeight + 80.dp + 40.dp,
+                fadeDistance = navigationBarHeight + 160.dp,
                 modifier = Modifier.align(Alignment.BottomCenter)
             )
 
