@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  只订阅窗口状态变化（typeWindowStateChanged），用于得知当前前台应用；
+  canRetrieveWindowContent=false：本服务不读取、也无法读取屏幕内容。
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault"
+    android:canRetrieveWindowContent="false"
+    android:description="@string/accessibility_description"
+    android:notificationTimeout="300"
+    android:summary="@string/accessibility_summary" />

@@ -50,9 +50,23 @@ class ReporterStateMachine {
     var currentSide: Int = 0
         private set
 
+    /** 估算比分：按回合结算累计（回合获胜 = 我方 +1，回合失败 = 对方 +1）。 */
+    var estimatedScoreUs: Int = 0
+        private set
+    var estimatedScoreEnemy: Int = 0
+        private set
+
+    /** 最近一次触发的事件（供界面/悬浮窗显示"当前触发的事件"）。 */
+    var lastEventId: String? = null
+        private set
+    var lastEventAtMs: Long = 0
+        private set
+
     private var stateEnteredAtMs = 0L
     private var lastRoundStartEnteredAtMs: Long? = null
     private var gameStartAnnounced = false
+    private var lastFrameAtMs = 0L
+    private var lastScoredRound = -1
 
     private var roundLast40sTriggered = false
     private var roundLast20sTriggered = false
@@ -71,6 +85,19 @@ class ReporterStateMachine {
         resetRoundTriggers()
     }
 
+    /** 当前阶段的估算剩余秒数（无阶段时长可估算时为 null）。 */
+    fun estimatedRemainingSeconds(): Int? {
+        val state = currentStateId ?: return null
+        val elapsed = (currentStateTimeMs / 1000L).toInt()
+        val total = when (state) {
+            StateId.RoundStart -> roundStartCountdownSeconds(currentRound)
+            StateId.RoundIngame -> RoundIngameDurationSeconds
+            StateId.RoundIngameBombPlanted -> BombPlantedDurationSeconds
+            else -> return null
+        }
+        return (total - elapsed).coerceAtLeast(0)
+    }
+
     class SideSignal(
         val attackerHit: Boolean,
         val defenderHit: Boolean,
@@ -83,6 +110,7 @@ class ReporterStateMachine {
      * @param scores  15 个状态的最高 ZNCC 分
      */
     fun processFrame(nowMs: Long, matches: BooleanArray, scores: DoubleArray, side: SideSignal?) {
+        lastFrameAtMs = nowMs
         if (side != null) updateSide(side)
 
         currentStateTimeMs = if (currentStateId != null && nowMs >= stateEnteredAtMs) {
@@ -203,10 +231,12 @@ class ReporterStateMachine {
                 } else {
                     trigger("event_round_end_attacker")
                 }
+                countRoundForScore(won = true)
                 resetRoundTriggers()
             }
             StateId.RoundEndLose -> {
                 trigger("event_round_end_defeat")
+                countRoundForScore(won = false)
                 resetRoundTriggers()
             }
             StateId.GameEndWin -> {
@@ -257,9 +287,24 @@ class ReporterStateMachine {
         currentRound = 0
         lastRoundStartEnteredAtMs = null
         gameStartAnnounced = false
+        estimatedScoreUs = 0
+        estimatedScoreEnemy = 0
+        lastScoredRound = -1
+    }
+
+    /**
+     * 估算比分：回合获胜/失败各记一次。同一回合重复进入结算横幅只记一次
+     * （靠 currentRound 去重；若中途漏掉购买横幅，该回合可能不计入，属估算的已知限制）。
+     */
+    private fun countRoundForScore(won: Boolean) {
+        if (currentRound == lastScoredRound) return
+        lastScoredRound = currentRound
+        if (won) estimatedScoreUs++ else estimatedScoreEnemy++
     }
 
     private fun trigger(eventId: String) {
+        lastEventId = eventId
+        lastEventAtMs = lastFrameAtMs
         eventTriggered?.invoke(eventId)
     }
 }
@@ -292,4 +337,29 @@ object VoiceTable {
 
     fun fileNamesFor(eventId: String): List<String> =
         entries.firstOrNull { it.eventId == eventId }?.fileNames ?: emptyList()
+
+    /** 事件的中文短标签（界面与悬浮窗显示"当前触发的事件"用）。 */
+    val DisplayNames: Map<String, String> = mapOf(
+        "event_round_ingame_last_40s" to "剩余 40 秒",
+        "event_round_ingame_last_20s" to "剩余 20 秒",
+        "event_round_start_last_5s" to "开局倒计时 5 秒",
+        "event_game_start_attacker" to "比赛开始 · 攻方",
+        "event_game_start_defender" to "比赛开始 · 守方",
+        "event_round_ingame_attacker" to "回合进行中 · 攻方",
+        "event_round_ingame_defender" to "回合进行中 · 守方",
+        "event_last_round_of_first_half" to "上半场最后一回合",
+        "event_game_start_second_half" to "下半场开始",
+        "event_victory_in_last_3s" to "最后 3 秒险胜",
+        "event_round_end_attacker" to "回合获胜 · 攻方",
+        "event_round_end_defender" to "回合获胜 · 守方",
+        "event_round_end_defeat" to "回合失败",
+        "event_game_end_win" to "对局胜利",
+        "event_game_end_lose" to "对局失败",
+        "event_game_end_draw" to "对局平局",
+        "event_game_choose_character" to "选择角色",
+        "event_game_switch_side" to "攻守互换",
+        "event_round_ingame_bomb_planted" to "炸弹已安装"
+    )
+
+    fun displayName(eventId: String): String = DisplayNames[eventId] ?: eventId
 }

@@ -30,6 +30,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
@@ -49,7 +50,8 @@ fun Text(
     modifier: Modifier = Modifier,
     color: Color = Color.Unspecified,
     fontSize: TextUnit = TextUnit.Unspecified,
-    fontWeight: FontWeight? = null
+    fontWeight: FontWeight? = null,
+    fontFamily: FontFamily? = null
 ) {
     BasicText(
         text,
@@ -57,7 +59,8 @@ fun Text(
         style = TextStyle(
             color = if (color.isSpecified) color else Color.Unspecified,
             fontSize = fontSize,
-            fontWeight = fontWeight
+            fontWeight = fontWeight,
+            fontFamily = fontFamily
         )
     )
 }

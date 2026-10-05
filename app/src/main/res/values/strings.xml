@@ -4,4 +4,8 @@
     <string name="notif_channel">识别服务</string>
     <string name="notif_title">香奈美正在播报</string>
     <string name="notif_text">点按返回应用，停止识别请在应用内操作</string>
+
+    <string name="accessibility_label">香奈美 · 后台驻留</string>
+    <string name="accessibility_summary">判断当前前台应用并提升后台存活率，不读取屏幕内容</string>
+    <string name="accessibility_description">开启后香奈美能知道当前是否在游戏里，并显著降低识别进程被系统清理的概率（进程被杀后必须重新授权录屏）。本服务不读取、也无法读取屏幕内容，画面完全来自你手动授权的屏幕录制。</string>
 </resources>

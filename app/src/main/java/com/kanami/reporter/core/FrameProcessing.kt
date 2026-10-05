@@ -18,6 +18,10 @@ object ReporterStates {
     const val AttackerSideTemplateName = "side_attacker"
     const val DefenderSideTemplateName = "side_defender"
 
+    /** 比分数字模板前缀：`score_us.d0..d7`（我方/左侧板）与 `score_enemy.d0..d7`（对方/右侧板）。 */
+    const val ScoreUsTemplatePrefix = "score_us"
+    const val ScoreEnemyTemplatePrefix = "score_enemy"
+
     val Names = arrayOf(
         "game_choose_character",
         "game_start_attacker",
@@ -77,6 +81,21 @@ class TemplateModel(
     val energy: Double
 ) {
     val pixelCount: Int get() = roiWidth * roiHeight
+
+    /**
+     * 二值化版本（阈值 [FrameProcessing.BinaryThreshold]）。
+     *
+     * 比分数字这类模板用灰度 ZNCC 分辨率不够：实测同一数字跨帧 0.97，而 0 与 3/6 之间
+     * 也能到 0.77~0.80，会互相混。二值形状相关把"数字形状"和"半透明底板+背景"分开，
+     * 异数字降到 0.54~0.86、同数字仍 0.94~0.98。
+     */
+    val binaryPixels: DoubleArray = DoubleArray(pixelCount) { i ->
+        if ((pixels[i].toInt() and 0xFF) > FrameProcessing.BinaryThreshold) 255.0 else 0.0
+    }
+
+    val binaryMean: Double = binaryPixels.average()
+
+    val binaryEnergy: Double = binaryPixels.sumOf { d -> val v = d - binaryMean; v * v }
 }
 
 object KrtTemplateStore {
@@ -136,6 +155,9 @@ object KrtTemplateStore {
  * gray = (29*B + 150*G + 77*R) >> 8（输入 RGBA）。
  */
 object FrameProcessing {
+    /** 比分数字二值化阈值（实机帧统计得到：数字为亮白 200+，底板/背景远低于此）。 */
+    const val BinaryThreshold = 165
+
     class NormalizedFrame(
         var gray: ByteArray,
         var contentHeight: Int
@@ -238,6 +260,61 @@ object FrameProcessing {
             val energy = squared - sum * sum / n
             if (energy < 1.0) continue
             val score = product / kotlin.math.sqrt(energy * model.energy)
+            if (score > best) best = score
+        }
+        return best
+    }
+
+    /**
+     * 二值形状 ZNCC（比分数字专用）：模板与窗口两侧都按 [BinaryThreshold] 二值化后再算相关。
+     * 与 [score] 同样做 13 个整数/半像素偏移搜索，取最高分。
+     */
+    fun scoreBinary(model: TemplateModel, gray: ByteArray, offsets: Array<Pair<Double, Double>> = MatchOffsets): Double {
+        val frameW = ReporterStates.FrameWidth
+        val n = model.pixelCount
+        if (model.binaryEnergy < 1.0) return -1.0
+        var best = -1.0
+        for ((ox, oy) in offsets) {
+            val xs = model.roiX + ox
+            val ys = model.roiY + oy
+            if (xs < 0 || ys < 0 || xs + model.roiWidth > frameW ||
+                ys + model.roiHeight > ReporterStates.FrameHeight
+            ) {
+                continue
+            }
+            val isInt = ox == Math.floor(ox) && oy == Math.floor(oy)
+            var sum = 0.0
+            var squared = 0.0
+            var product = 0.0
+            var index = 0
+            if (isInt) {
+                val x0 = xs.toInt()
+                val y0 = ys.toInt()
+                for (yy in 0 until model.roiHeight) {
+                    var row = (y0 + yy) * frameW + x0
+                    for (xx in 0 until model.roiWidth) {
+                        val v = if ((gray[row + xx].toInt() and 0xFF) > BinaryThreshold) 255.0 else 0.0
+                        sum += v
+                        squared += v * v
+                        product += v * (model.binaryPixels[index] - model.binaryMean)
+                        index++
+                    }
+                }
+            } else {
+                for (yy in 0 until model.roiHeight) {
+                    for (xx in 0 until model.roiWidth) {
+                        val raw = sampleBilinear(gray, xs + xx, ys + yy)
+                        val v = if (raw > BinaryThreshold) 255.0 else 0.0
+                        sum += v
+                        squared += v * v
+                        product += v * (model.binaryPixels[index] - model.binaryMean)
+                        index++
+                    }
+                }
+            }
+            val energy = squared - sum * sum / n
+            if (energy < 1.0) continue
+            val score = product / kotlin.math.sqrt(energy * model.binaryEnergy)
             if (score > best) best = score
         }
         return best
