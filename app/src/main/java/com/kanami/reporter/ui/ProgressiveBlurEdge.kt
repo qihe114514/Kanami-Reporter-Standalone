@@ -21,9 +21,11 @@ import com.kyant.backdrop.isRuntimeShaderSupported
  * `runtimeShaderEffect` 按纵向坐标做 alpha mask（越靠边越不透明）。
  * 折射源是"背景壁纸 + 滚动内容"合并后的 backdrop，所以模糊的确实是页面内容本身。
  *
- * [fadeEnd] 决定"完全不模糊"落在模糊带的哪个位置（0 = 紧贴边缘，1 = 模糊带的内侧尽头）。
- * **它和 [edgeHeight] 是两个独立的东西**：高度决定渐变有多长（越大越柔和），
- * fadeEnd 决定从哪里开始变模糊。想要"很早就开始模糊、而且过渡很长"，就把高度调大、fadeEnd 调小。
+ * **两个参数各管一件事，不要混着调**（上一版按比例定位，结果调高度时位置也跟着漂）：
+ * - [fadeDistance]：**从屏幕边缘往里多少距离之后完全不模糊**。这是"模糊到哪里为止"，
+ *   物理尺寸，与 [edgeHeight] 无关。想让内容更早/更晚进入模糊，只动这一个。
+ * - [edgeHeight]：模糊带总共多高，也就是渐变有多长（比 [fadeDistance] 大出来的部分是纯渐变尾巴）。
+ *   想让过渡更绵长柔和，只动这一个。
  *
  * API 33 以下没有 RuntimeShader，退化成单纯的一块模糊（仍有过渡感，只是没有渐隐）。
  */
@@ -31,9 +33,9 @@ import com.kyant.backdrop.isRuntimeShaderSupported
 fun ProgressiveBlurEdge(
     backdrop: Backdrop,
     fromTop: Boolean,
+    fadeDistance: Dp,
     modifier: Modifier = Modifier,
-    edgeHeight: Dp = 72.dp,
-    fadeEnd: Float = 0.35f
+    edgeHeight: Dp = fadeDistance + 64.dp
 ) {
     val shaderSupported = isRuntimeShaderSupported()
     Box(
@@ -46,6 +48,8 @@ fun ProgressiveBlurEdge(
                 effects = {
                     blur(10f.dp.toPx())
                     if (shaderSupported) {
+                        // 把"物理距离"换算成 shader 要的比例；夹住上界避免渐变被压没
+                        val fade = (fadeDistance.toPx() / size.height).coerceIn(0.05f, 1f)
                         runtimeShaderEffect(
                             "KanamiEdgeMask",
                             """
@@ -63,7 +67,7 @@ fun ProgressiveBlurEdge(
                         ) {
                             setFloatUniform("size", size.width, size.height)
                             setFloatUniform("fromTop", if (fromTop) 1f else 0f)
-                            setFloatUniform("fadeEnd", fadeEnd)
+                            setFloatUniform("fadeEnd", fade)
                         }
                     }
                 }

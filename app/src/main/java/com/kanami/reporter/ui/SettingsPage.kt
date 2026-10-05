@@ -191,7 +191,7 @@ fun SettingsPage(
                 Spacer(Modifier.height(6.dp))
                 Text(
                     "香奈美x黑潮爆破 · 手机版\n" +
-                        "作者：Yiyan\n" +
+                        "作者：其核\n" +
                         "许可证：GPL-2.0-or-later\n" +
                         "识别逻辑与桌面版同源，不依赖 OBS、不注入游戏进程。",
                     color = StatusColors.idle,

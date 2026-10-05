@@ -189,23 +189,20 @@ class MainActivity : ComponentActivity() {
 
             // 顶部 / 底部渐进式模糊：画在内容之上、标题与底栏之下，所以标题文字始终清晰。
             //
-            // 这里把两件事分开控制（上一版把它们混成一件，结果"开始得早"就必然"过渡很短"，
-            // 看着像硬切）：
-            //   edgeHeight —— 渐变总共多长，越长越柔和；
-            //   fadeEnd    —— "完全不模糊"落在模糊带的哪个比例处，越小越早进入模糊。
-            // 现在高度都放大、fadeEnd 都压小：很早就开始虚化，而且过渡很长。
+            // fadeDistance 就是"模糊区域从边缘伸进来多远"，用物理尺寸直接指定，
+            // 不再用模糊带高度的比例（那样一调高度，模糊位置就跟着漂）。
+            //   顶部 —— 正好到标题文字的上边缘，内容一和标题重叠就开始虚化；
+            //   底部 —— 越过底栏顶边再往上伸 40dp，让内容进入底栏之前就已经虚化。
             ProgressiveBlurEdge(
                 backdrop = edgeBackdrop,
                 fromTop = true,
-                edgeHeight = titleBarHeight + 72.dp,
-                fadeEnd = 0.28f,
+                fadeDistance = statusBarHeight + 16.dp,
                 modifier = Modifier.align(Alignment.TopCenter)
             )
             ProgressiveBlurEdge(
                 backdrop = edgeBackdrop,
                 fromTop = false,
-                edgeHeight = bottomBarHeight + 80.dp,
-                fadeEnd = 0.30f,
+                fadeDistance = navigationBarHeight + 80.dp + 40.dp,
                 modifier = Modifier.align(Alignment.BottomCenter)
             )
 
