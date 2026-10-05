@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 水滴形玻璃 + 声波，呼应「液态玻璃播报」 -->
+    <path
+        android:pathData="M54,26C66,40 76,52 76,64a22,22 0 1,1 -44,0C32,52 42,40 54,26Z"
+        android:fillColor="#BFD9FF"
+        android:fillAlpha="0.55" />
+    <path
+        android:pathData="M54,26C66,40 76,52 76,64a22,22 0 1,1 -44,0C32,52 42,40 54,26Z"
+        android:strokeColor="#EAF4FF"
+        android:strokeWidth="2.5"
+        android:strokeAlpha="0.9" />
+    <path
+        android:pathData="M44,60a12,12 0 0,0 20,8"
+        android:strokeColor="#EAF4FF"
+        android:strokeWidth="3"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M40,52a18,18 0 0,0 6,20"
+        android:strokeColor="#9FC4F8"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:strokeAlpha="0.8" />
+    <path
+        android:pathData="M68,50a20,20 0 0,1 -5,22"
+        android:strokeColor="#9FC4F8"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:strokeAlpha="0.8" />
+</vector>

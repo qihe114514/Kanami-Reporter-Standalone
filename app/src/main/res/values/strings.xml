@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">香奈美x黑潮爆破</string>
+    <string name="notif_channel">识别服务</string>
+    <string name="notif_title">香奈美正在播报</string>
+    <string name="notif_text">点按返回应用，停止识别请在应用内操作</string>
+</resources>
