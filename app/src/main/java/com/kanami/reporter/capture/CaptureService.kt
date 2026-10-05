@@ -105,13 +105,17 @@ class CaptureService : Service() {
     private var lastRebuildAtMs = 0L
     private var loggedFrames = 0
 
+    /**
+     * 冻结看门狗。**跑在采集线程上**：帧回调和它都会读写 FreezeDetector 的抽样缓冲，
+     * 放在同一个线程就不需要加锁；采集线程即使没有帧也活着（是我们自己的 HandlerThread）。
+     */
     private val watchdog = object : Runnable {
         override fun run() {
             if (imageReader != null) {
                 val state = freezeDetector.onNoFrame(SystemClock.elapsedRealtime())
                 maybePublishFreeze(state)
             }
-            mainHandler.postDelayed(this, FREEZE_WATCHDOG_MS)
+            workerHandler?.postDelayed(this, FREEZE_WATCHDOG_MS)
         }
     }
 
@@ -243,8 +247,7 @@ class CaptureService : Service() {
 
         overlay = OverlayController(this, settings).also { it.attach() }
 
-        mainHandler.removeCallbacks(watchdog)
-        mainHandler.postDelayed(watchdog, FREEZE_WATCHDOG_MS)
+        workerHandler?.postDelayed(watchdog, FREEZE_WATCHDOG_MS)
         DebugLog.log("capture", "开始识别：模板 ${engine.loadedTemplateCount} 个（含比分 ${engine.loadedScoreTemplateCount} 个）")
         return START_STICKY
     }
@@ -510,7 +513,7 @@ class CaptureService : Service() {
     private fun stopCapture() {
         engine.stop()
         StatusHub.setRunning(false)
-        mainHandler.removeCallbacks(watchdog)
+        workerHandler?.removeCallbacks(watchdog)
         mainHandler.removeCallbacks(delayedRebuild)
         overlay?.detach()
         overlay = null
