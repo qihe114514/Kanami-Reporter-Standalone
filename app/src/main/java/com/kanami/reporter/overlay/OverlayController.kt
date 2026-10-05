@@ -47,14 +47,16 @@ class OverlayController(private val service: Service, private val settings: Sett
             DebugLog.log("overlay", "没有悬浮窗权限，跳过显示")
             return false
         }
-        val screenHeight = service.resources.displayMetrics.heightPixels
-        val screenWidth = service.resources.displayMetrics.widthPixels
+        val metrics = service.resources.displayMetrics
+        // 默认位置用"短边"当参考高度：服务是在竖屏（App 内）起来的，而悬浮窗主要用在横屏游戏里，
+        // 用长边算出来的 y 在横屏下会掉到屏幕外。
+        val shortSide = minOf(metrics.widthPixels, metrics.heightPixels)
         val margin = OverlayViews.dp(service, 12f)
 
         val main = MainOverlayView(service)
         val mainLp = newParams(
             x = settings.overlayX.takeIf { it >= 0 } ?: margin,
-            y = settings.overlayY.takeIf { it >= 0 } ?: (screenHeight * 0.56f).toInt()
+            y = settings.overlayY.takeIf { it >= 0 } ?: (shortSide * 0.56f).toInt()
         )
         attachTouch(
             main, mainLp,
@@ -70,11 +72,12 @@ class OverlayController(private val service: Service, private val settings: Sett
         mainView = main
         mainParams = mainLp
 
-        if (settings.debugMode) addDebugWindow(screenWidth, screenHeight, margin)
+        if (settings.debugMode) addDebugWindow(shortSide, margin)
 
         attached = true
         DebugLog.log("overlay", "悬浮窗已显示（主${if (settings.debugMode) " + 调试" else ""}）")
         render()
+        clampToScreen()
         return true
     }
 
@@ -106,7 +109,7 @@ class OverlayController(private val service: Service, private val settings: Sett
         }
         if (settings.debugMode && debugView == null) {
             val metrics = service.resources.displayMetrics
-            addDebugWindow(metrics.widthPixels, metrics.heightPixels, OverlayViews.dp(service, 12f))
+            addDebugWindow(minOf(metrics.widthPixels, metrics.heightPixels), OverlayViews.dp(service, 12f))
         } else if (!settings.debugMode && debugView != null) {
             debugView?.let { runCatching { windowManager.removeView(it) } }
             debugView = null
@@ -115,11 +118,46 @@ class OverlayController(private val service: Service, private val settings: Sett
         render()
     }
 
-    private fun addDebugWindow(screenWidth: Int, screenHeight: Int, margin: Int) {
+    /** 屏幕尺寸/朝向变化后把窗口拉回可视区（横竖屏切换时位置可能落到屏幕外）。 */
+    fun clampToScreen() {
+        val metrics = service.resources.displayMetrics
+        clampOne(mainView, mainParams, metrics.widthPixels, metrics.heightPixels) { p ->
+            settings.overlayX = p.x
+            settings.overlayY = p.y
+        }
+        clampOne(debugView, debugParams, metrics.widthPixels, metrics.heightPixels) { p ->
+            settings.debugOverlayX = p.x
+            settings.debugOverlayY = p.y
+        }
+    }
+
+    private fun clampOne(
+        view: android.view.View?,
+        params: WindowManager.LayoutParams?,
+        screenWidth: Int,
+        screenHeight: Int,
+        persist: (WindowManager.LayoutParams) -> Unit
+    ) {
+        if (view == null || params == null || view.width == 0 || view.height == 0) return
+        val maxX = (screenWidth - view.width).coerceAtLeast(0)
+        val maxY = (screenHeight - view.height).coerceAtLeast(0)
+        val clampedX = params.x.coerceIn(0, maxX)
+        val clampedY = params.y.coerceIn(0, maxY)
+        if (clampedX == params.x && clampedY == params.y) return
+        params.x = clampedX
+        params.y = clampedY
+        runCatching { windowManager.updateViewLayout(view, params) }
+        persist(params)
+        DebugLog.logThrottled("overlay-clamp", 2000L, "overlay") {
+            "屏幕变化，悬浮窗位置修正为 (${params.x}, ${params.y})"
+        }
+    }
+
+    private fun addDebugWindow(shortSide: Int, margin: Int) {
         val view = DebugOverlayView(service)
         val lp = newParams(
             x = settings.debugOverlayX.takeIf { it >= 0 } ?: margin,
-            y = settings.debugOverlayY.takeIf { it >= 0 } ?: (screenHeight * 0.06f).toInt()
+            y = settings.debugOverlayY.takeIf { it >= 0 } ?: (shortSide * 0.06f).toInt()
         )
         attachTouch(
             view, lp,

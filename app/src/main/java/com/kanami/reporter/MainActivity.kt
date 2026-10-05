@@ -3,6 +3,7 @@ package com.kanami.reporter
 import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
@@ -10,6 +11,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,20 +22,21 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.collectAsState
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -44,13 +47,17 @@ import com.kanami.reporter.debug.DebugLog
 import com.kanami.reporter.permissions.PermissionHub
 import com.kanami.reporter.settings.Settings
 import com.kanami.reporter.status.StatusHub
-import com.kanami.reporter.ui.LiquidButton
-import com.kanami.reporter.ui.LiquidTab
 import com.kanami.reporter.ui.PermissionListCard
 import com.kanami.reporter.ui.ScoreListCard
 import com.kanami.reporter.ui.StatusCard
 import com.kanami.reporter.ui.StatusColors
 import com.kanami.reporter.ui.Text
+import com.kanami.reporter.ui.rememberHapticTick
+import com.kanami.reporter.ui.liquid.LiquidBottomTab
+import com.kanami.reporter.ui.liquid.LiquidBottomTabs
+import com.kanami.reporter.ui.liquid.LiquidButton
+import com.kanami.reporter.ui.liquid.TabIcon
+import com.kanami.reporter.ui.liquid.TabIconKind
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 
@@ -115,7 +122,7 @@ class MainActivity : ComponentActivity() {
         val backdrop = rememberLayerBackdrop()
 
         Box(Modifier.fillMaxSize()) {
-            AppBackground(backdrop)
+            AppBackground(context, backdrop)
 
             Column(
                 Modifier
@@ -171,41 +178,88 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** 背景层：被 backdrop 记录，供液态玻璃折射。 */
+    /** 背景层：壁纸 + 压暗遮罩，被 backdrop 记录，供液态玻璃折射。 */
     @Composable
-    private fun AppBackground(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop) {
+    private fun AppBackground(context: Context, backdrop: com.kyant.backdrop.backdrops.LayerBackdrop) {
         Box(
             Modifier
                 .fillMaxSize()
                 .layerBackdrop(backdrop)
-                .background(
-                    Brush.verticalGradient(
-                        listOf(Color(0xFF0B1020), Color(0xFF22345C), Color(0xFF0B1020))
-                    )
+        ) {
+            val wallpaper = remember {
+                runCatching {
+                    context.assets.open("background/kanami_bg.webp").use { BitmapFactory.decodeStream(it) }
+                }.getOrNull()?.asImageBitmap()
+            }
+            if (wallpaper != null) {
+                Image(
+                    bitmap = wallpaper,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
                 )
-        )
+            } else {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(Color(0xFF0B1020), Color(0xFF22345C), Color(0xFF0B1020))
+                            )
+                        )
+                )
+            }
+            // 上/下加深：保证状态栏区域与底栏上的文字可读
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(
+                                Color(0x99000000),
+                                Color(0x22000000),
+                                Color(0x66000000),
+                                Color(0xCC000000)
+                            )
+                        )
+                    )
+            )
+        }
     }
 
-    /** 底部标签栏（阶段 3 会换成液态玻璃库的底栏）。 */
+    /** 底部液态玻璃底栏（官方示例组件：胶囊玻璃 + 滑动透镜 + 拖动切换 + 按压反馈）。 */
     @Composable
     private fun BottomBar(
         tab: Int,
         onSelect: (Int) -> Unit,
         backdrop: com.kyant.backdrop.backdrops.LayerBackdrop
     ) {
-        Row(
-            Modifier
+        val haptic = rememberHapticTick()
+        LiquidBottomTabs(
+            selectedTabIndex = { tab },
+            onTabSelected = {
+                haptic()
+                onSelect(it)
+            },
+            backdrop = backdrop,
+            tabsCount = 2,
+            modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 24.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically
+                .padding(horizontal = 20.dp, vertical = 8.dp)
         ) {
-            LiquidTab(selected = tab == 0, onClick = { onSelect(0) }, backdrop = backdrop) {
-                Text("运行", color = StatusColors.text)
+            LiquidBottomTab({
+                haptic()
+                onSelect(0)
+            }) {
+                TabIcon(TabIconKind.Run, StatusColors.text, Modifier.size(22.dp))
+                Text("运行", color = StatusColors.text, fontSize = 11.sp)
             }
-            Spacer(Modifier.width(10.dp))
-            LiquidTab(selected = tab == 1, onClick = { onSelect(1) }, backdrop = backdrop) {
-                Text("设置", color = StatusColors.text)
+            LiquidBottomTab({
+                haptic()
+                onSelect(1)
+            }) {
+                TabIcon(TabIconKind.Settings, StatusColors.text, Modifier.size(22.dp))
+                Text("设置", color = StatusColors.text, fontSize = 11.sp)
             }
         }
     }
@@ -240,6 +294,7 @@ class MainActivity : ComponentActivity() {
         }
 
         Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            val haptic = rememberHapticTick()
             PermissionListCard(
                 items = remember(resumeTick, status.running) { hub.items() },
                 backdrop = backdrop,
@@ -251,6 +306,7 @@ class MainActivity : ComponentActivity() {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 LiquidButton(
                     onClick = {
+                        haptic()
                         val manager =
                             context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
                         projectionLauncher.launch(manager.createScreenCaptureIntent())
@@ -261,6 +317,7 @@ class MainActivity : ComponentActivity() {
                 }
                 LiquidButton(
                     onClick = {
+                        haptic()
                         context.stopService(Intent(context, CaptureService::class.java))
                         DebugLog.log("ui", "已请求停止识别")
                     },

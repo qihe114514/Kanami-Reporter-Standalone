@@ -1,6 +1,7 @@
 package com.kanami.reporter.settings
 
 import android.content.Context
+import com.kanami.reporter.debug.DebugLog
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -23,7 +24,12 @@ class Settings(context: Context) {
     /** 调试模式：开启后写私有目录日志，并额外显示调试悬浮窗。 */
     var debugMode: Boolean
         get() = prefs.getBoolean(KEY_DEBUG_MODE, false)
-        set(value) = prefs.edit().putBoolean(KEY_DEBUG_MODE, value).also { it.apply() }.let { bump() }
+        set(value) {
+            prefs.edit().putBoolean(KEY_DEBUG_MODE, value).apply()
+            // 运行时开启要立刻开始写日志（关闭时停止写文件，logcat 仍保留）
+            DebugLog.enabled = value
+            bump()
+        }
 
     /** 识别时是否显示悬浮窗。 */
     var showOverlay: Boolean

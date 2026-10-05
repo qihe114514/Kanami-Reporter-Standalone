@@ -6,7 +6,21 @@
 - `kanami_core.py`：KRT 解析、帧归一化（宽度等比 + 顶对齐）、ZNCC（13 偏移）
 - `cut_mobile.py` / `cut_more.py`：从指定时间点的抽帧裁剪模板（自动亮字包围盒）
 - `scan_final.py`：对录屏 1fps 全程扫描，输出状态时间线（`timeline_final.txt`）
+- `extract_score_plates.py`：从 1fps 抽帧里抽出左右比分板区域，压成 `data/score_plates.npz`
+- `cut_score.py`：切比分数字模板（二值形状相关 + 多实例）并复算准确率
+- **`verify_shipped.py`：对已装配进 APK 的模板做离线回归（这个项目自己的测试）**：
+  1. 每个 `.krt` 都过一遍 Kotlin 加载器的校验（魔数/版本/尺寸/ROI/平坦度）与命名分组；
+  2. 状态模板在来源帧上灰度 ZNCC ≥0.95（购买横幅/阵营副标题/开局计时/炸弹面板/胜利横幅）；
+  3. 比分数字在 12 个人工核对点上二值读数 100% 正确。
+  全部通过退出码 0。改了模板或改了归一化/匹配算法后**必须**跑一遍。
 - 依赖：numpy、Pillow；录屏帧用 ffmpeg 抽取（crop=380:300:1200:0 / 全帧 PNG）
+
+跑法（本机 python 不在 PATH，用 codex runtime 的那个）：
+
+```bash
+PY="C:/Users/VOS-User/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe"
+PYTHONIOENCODING=utf-8 "$PY" verify_shipped.py
+```
 
 录屏：`Screenrecorder-2026-10-05-16-07-56-964.mp4`（2772×1280@60fps，24min）。
 脚本内的 WORK 路径为当时临时目录，复用时改为本机路径即可。

@@ -124,7 +124,9 @@ fun GlassSlider(
 
 /**
  * 液态玻璃组件集 —— 基于 Kyant0/AndroidLiquidGlass（Backdrop）。
- * 效果组合与官方示例组件（LiquidButton 等）一致：vibrancy + 轻模糊 + 边缘透镜折射。
+ *
+ * 按钮与底栏改用官方示例组件（见 `ui/liquid/`），那里的按下反馈是"按触摸点挤压玻璃 +
+ * 径向高亮"，比自绘的单纯缩放更接近真正的液态玻璃。这里只保留卡片与滑杆。
  */
 
 /** 玻璃容器卡片。 */
@@ -148,86 +150,6 @@ fun GlassCard(
                 highlight = { Highlight.Default },
                 shadow = { Shadow.Default }
             )
-    ) {
-        content()
-    }
-}
-
-/** 液态玻璃按钮：按下时轻微缩放，松开回弹。 */
-@Composable
-fun LiquidButton(
-    onClick: () -> Unit,
-    backdrop: Backdrop,
-    modifier: Modifier = Modifier,
-    shape: Shape = Capsule(),
-    tint: Color = Color.Unspecified,
-    content: @Composable RowScope.() -> Unit
-) {
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    val scale = remember { Animatable(1f) }
-    LaunchedEffect(pressed) {
-        scale.animateTo(
-            if (pressed) 0.96f else 1f,
-            spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMediumLow)
-        )
-    }
-    Row(
-        modifier
-            .scale(scale.value)
-            .drawBackdrop(
-                backdrop = backdrop,
-                shape = { shape },
-                effects = {
-                    vibrancy()
-                    blur(2f.dp.toPx())
-                    lens(12f.dp.toPx(), 24f.dp.toPx())
-                },
-                highlight = { Highlight.Default },
-                shadow = { Shadow.Default },
-                onDrawSurface = {
-                    if (tint.isSpecified) {
-                        drawRect(tint)
-                    }
-                }
-            )
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
-            .height(56.dp)
-            .padding(horizontal = 24.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        content = content
-    )
-}
-
-/** 底部玻璃标签栏中的单个标签。 */
-@Composable
-fun LiquidTab(
-    selected: Boolean,
-    onClick: () -> Unit,
-    backdrop: Backdrop,
-    modifier: Modifier = Modifier,
-    content: @Composable () -> Unit
-) {
-    Box(
-        modifier
-            .drawBackdrop(
-                backdrop = backdrop,
-                shape = { Capsule() },
-                effects = {
-                    if (selected) {
-                        vibrancy()
-                        blur(2f.dp.toPx())
-                        lens(10f.dp.toPx(), 22f.dp.toPx())
-                    } else {
-                        blur(1f.dp.toPx())
-                    }
-                },
-                highlight = { if (selected) Highlight.Default else null },
-                shadow = { if (selected) Shadow.Default else null }
-            )
-            .clickable(onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 12.dp),
-        contentAlignment = Alignment.Center
     ) {
         content()
     }

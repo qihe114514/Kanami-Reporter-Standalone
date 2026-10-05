@@ -303,7 +303,8 @@ class RecognitionEngine(private val context: Context) {
 
         private companion object {
             const val CONFIRM_FRAMES = 3
-            const val CLEAR_FRAMES = 30
+            /** 连续这么多次读不到比分才清空（打开全屏购买菜单会遮挡，别一秒就清）。 */
+            const val CLEAR_FRAMES = 100
         }
     }
 

@@ -122,6 +122,7 @@ class CaptureService : Service() {
             if (displayId != Display.DEFAULT_DISPLAY) return
             DebugLog.log("capture", "显示变化，检查采集几何")
             ensureDisplaySize(force = false)
+            overlay?.clampToScreen()
         }
     }
 
