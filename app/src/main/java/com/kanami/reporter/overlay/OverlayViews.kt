@@ -10,7 +10,6 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import com.kanami.reporter.core.VoiceTable
 import com.kanami.reporter.status.RecognitionStatus
-import com.kanami.reporter.capture.FreezeDetector
 import kotlin.math.roundToInt
 
 /**
@@ -65,7 +64,6 @@ internal object OverlayViews {
 
     fun statusColor(status: RecognitionStatus): Int = when {
         !status.running -> COLOR_IDLE
-        status.capture.frozen -> COLOR_WARN
         status.capture.error != null -> COLOR_WARN
         else -> COLOR_OK
     }
@@ -73,8 +71,7 @@ internal object OverlayViews {
     fun statusShort(status: RecognitionStatus): String = when {
         !status.running -> "未识别"
         status.capture.error != null -> "采集异常"
-        status.capture.frozen -> "画面不动了"
-        !status.capture.landscape -> "等待横屏对局"
+        !status.capture.landscape -> "采集中 · 待横屏"
         else -> "识别中"
     }
 
@@ -99,10 +96,9 @@ internal object OverlayViews {
 
     fun freezeDetail(status: RecognitionStatus): String = when {
         !status.running -> "未在识别"
-        status.capture.frozen -> "${status.capture.frozenReason?.let { FreezeDetector.reasonLabel(it) } ?: "画面停止"}" +
-            "（${status.capture.frozenForMs / 1000}s）"
 
-        !status.capture.landscape -> "当前不是横屏画面，暂不做匹配"
+        !status.capture.landscape -> "现在是竖屏（本应用界面），切回游戏自动识别"
+        status.capture.frames == 0L -> "还没收到画面，切回游戏后会开始"
         else -> "正常"
     }
 }
@@ -110,7 +106,10 @@ internal object OverlayViews {
 /** 主悬浮窗：收起 = 小胶囊，展开 = 状态面板。 */
 internal class MainOverlayView(context: Context) : LinearLayout(context) {
 
-    private val dot: View = OverlayViews.dot(context, OverlayViews.COLOR_IDLE)
+    // 收起态和展开态各要一个圆点：同一个 View 不能挂到两个父容器上，
+    // 第二次 addView 会抛 "The specified child already has a parent"（采集一起就闪退）。
+    private val pillDot: View = OverlayViews.dot(context, OverlayViews.COLOR_IDLE)
+    private val panelDot: View = OverlayViews.dot(context, OverlayViews.COLOR_IDLE)
     private val pillText: TextView = OverlayViews.text(context, 12f, OverlayViews.COLOR_TEXT, bold = true)
     private val pill: LinearLayout
     private val panel: LinearLayout
@@ -129,7 +128,7 @@ internal class MainOverlayView(context: Context) : LinearLayout(context) {
             val padH = OverlayViews.dp(context, 10f)
             val padV = OverlayViews.dp(context, 6f)
             setPadding(padH, padV, padH, padV)
-            addView(dot, LayoutParams(OverlayViews.dp(context, 10f), OverlayViews.dp(context, 10f)).apply {
+            addView(pillDot, LayoutParams(OverlayViews.dp(context, 10f), OverlayViews.dp(context, 10f)).apply {
                 marginEnd = OverlayViews.dp(context, 8f)
             })
             addView(pillText)
@@ -144,7 +143,7 @@ internal class MainOverlayView(context: Context) : LinearLayout(context) {
             val titleRow = LinearLayout(context).apply {
                 orientation = HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                addView(dot, LayoutParams(OverlayViews.dp(context, 10f), OverlayViews.dp(context, 10f)).apply {
+                addView(panelDot, LayoutParams(OverlayViews.dp(context, 10f), OverlayViews.dp(context, 10f)).apply {
                     marginEnd = OverlayViews.dp(context, 8f)
                 })
                 addView(titleText)
@@ -166,7 +165,11 @@ internal class MainOverlayView(context: Context) : LinearLayout(context) {
 
     fun render(status: RecognitionStatus, collapsed: Boolean) {
         val color = OverlayViews.statusColor(status)
-        dot.background = GradientDrawable().apply {
+        pillDot.background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(color)
+        }
+        panelDot.background = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
             setColor(color)
         }
@@ -195,7 +198,8 @@ internal class MainOverlayView(context: Context) : LinearLayout(context) {
 
         footer.text = buildString {
             append("${OverlayViews.freezeDetail(status)}  ·  ")
-            append("${status.capture.frameWidth}×${status.capture.frameHeight}@${status.capture.fps}fps")
+            append("${status.capture.frameWidth}×${status.capture.frameHeight}")
+            append("  ·  已采集 ${status.capture.frames} 帧")
         }
     }
 
@@ -240,7 +244,8 @@ internal class DebugOverlayView(context: Context) : LinearLayout(context) {
         val clockPart = match.remainingSeconds?.let { "估算 ${OverlayViews.clock(it)}" } ?: "计时未知"
         matchText.text = "${OverlayViews.sideLabel(match.side)} · 第 ${match.round} 回合 · $clockPart"
         foregroundText.text = "前台：${status.foregroundPackage ?: "未知（未开无障碍）"}"
-        captureText.text = "采集 ${status.capture.frameWidth}×${status.capture.frameHeight}@${status.capture.fps}fps" +
+        captureText.text = "采集 ${status.capture.frameWidth}×${status.capture.frameHeight}" +
+            "  已 ${status.capture.frames} 帧" +
             "  面板 ${status.capture.panelWidth}×${status.capture.panelHeight}" +
             "  ${OverlayViews.statusShort(status)}" +
             (status.capture.error?.let { "  异常：$it" } ?: "")

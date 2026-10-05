@@ -24,6 +24,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastCoerceAtMost
 import androidx.compose.ui.util.lerp
+import com.kanami.reporter.ui.GlassTuning
 import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.drawBackdrop
 import com.kyant.backdrop.effects.blur
@@ -61,9 +62,11 @@ fun LiquidButton(
                 backdrop = backdrop,
                 shape = { Capsule() },
                 effects = {
+                    val blurScale = GlassTuning.blur
+                    val lensScale = GlassTuning.refraction
                     vibrancy()
-                    blur(2f.dp.toPx())
-                    lens(12f.dp.toPx(), 24f.dp.toPx())
+                    blur(2f.dp.toPx() * blurScale)
+                    lens(12f.dp.toPx() * lensScale, 24f.dp.toPx() * lensScale)
                 },
                 layerBlock = if (isInteractive) {
                     {

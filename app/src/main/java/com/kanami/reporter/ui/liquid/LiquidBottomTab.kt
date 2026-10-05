@@ -1,5 +1,5 @@
 // 来源：Kyant0/AndroidLiquidGlass（tag 2.0.1）app/.../catalog/components/LiquidBottomTab.kt
-// 许可：Apache-2.0。改动：包名、可见性（跨文件仍需同模块可见）。
+// 许可：Apache-2.0。改动：包名、可见性。
 package com.kanami.reporter.ui.liquid
 
 import androidx.compose.foundation.clickable
@@ -40,9 +40,9 @@ fun RowScope.LiquidBottomTab(
             .fillMaxHeight()
             .weight(1f)
             .graphicsLayer {
-                val scale = scale()
-                scaleX = scale
-                scaleY = scale
+                val current = scale()
+                scaleX = current
+                scaleY = current
             },
         verticalArrangement = Arrangement.spacedBy(2f.dp, Alignment.CenterVertically),
         horizontalAlignment = Alignment.CenterHorizontally,

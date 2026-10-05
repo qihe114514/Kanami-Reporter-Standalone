@@ -3,7 +3,6 @@ package com.kanami.reporter.ui
 import android.content.Context
 import android.content.Intent
 import android.os.SystemClock
-import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -32,6 +31,7 @@ import com.kanami.reporter.permissions.PermissionHub
 import com.kanami.reporter.settings.Settings
 import com.kanami.reporter.status.RecognitionStatus
 import com.kanami.reporter.status.StatusHub
+import com.kanami.reporter.ui.liquid.LiquidSlider
 import com.kyant.backdrop.Backdrop
 import kotlinx.coroutines.delay
 
@@ -46,25 +46,50 @@ fun SettingsPage(
     status: RecognitionStatus,
     onLaunch: (Intent) -> Unit
 ) {
-    var threshold by remember(revision) { mutableStateOf(settings.threshold.toFloat()) }
+    // 注意：这几个滑块状态**不能**写成 `remember(revision) { ... }`。
+    // 带上 revision 当 key 时，每次写设置都会重建出一个新的 MutableState，而传给 LiquidSlider 的
+    // `value = { threshold }` 这类 lambda 会被 Compose 记忆化（捕获的仍是**旧**的 state 对象），
+    // 于是滑块读旧值、写旧值，界面上的数字纹丝不动，点"恢复默认"也回不去。
+    var threshold by remember { mutableStateOf(settings.threshold.toFloat()) }
+    var refraction by remember { mutableStateOf(settings.glassRefraction) }
+    var blurStrength by remember { mutableStateOf(settings.glassBlur) }
     var tapCount by remember { mutableIntStateOf(0) }
     var lastTapAt by remember { mutableLongStateOf(0L) }
-    var debugHint by remember { mutableStateOf<String?>(null) }
     var showsLog by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf<String?>(null) }
+
+    // 拖动时实时改引擎；落盘延后到停手，免得每动一格都写 SharedPreferences 触发整页重组。
+    LaunchedEffect(threshold) {
+        engine.threshold = threshold.toDouble()
+        delay(250)
+        settings.threshold = threshold.toDouble()
+    }
+
+    // 玻璃外观同理：先改内存态（立刻重绘），停手 300ms 后才落盘
+    LaunchedEffect(refraction) {
+        GlassTuning.refraction = refraction
+        delay(300)
+        settings.glassRefraction = refraction
+    }
+    LaunchedEffect(blurStrength) {
+        GlassTuning.blur = blurStrength
+        delay(300)
+        settings.glassBlur = blurStrength
+    }
 
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         GlassCard(backdrop = backdrop) {
             Column(Modifier.padding(20.dp)) {
                 Text("匹配阈值：%.2f".format(threshold), color = StatusColors.text)
-                GlassSlider(
-                    value = threshold,
-                    onValueChange = {
-                        threshold = it
-                        engine.threshold = it.toDouble()
-                        settings.threshold = it.toDouble()
-                    },
-                    valueRange = 0.80f..0.99f
+                Spacer(Modifier.height(14.dp))
+                LiquidSlider(
+                    value = { threshold },
+                    onValueChange = { threshold = it },
+                    valueRange = 0.80f..0.99f,
+                    visibilityThreshold = 0.001f,
+                    backdrop = backdrop
                 )
+                Spacer(Modifier.height(12.dp))
                 Text(
                     "低于 0.90 容易误报；手机端模板已按实机录屏验证，建议保持默认。",
                     color = StatusColors.dim,
@@ -81,56 +106,61 @@ fun SettingsPage(
             subtitle = if (settings.showOverlay) "识别时显示" else "已关闭"
         )
 
+        GlassToggle(
+            checked = settings.autoCheckUpdates,
+            onCheckedChange = { settings.autoCheckUpdates = it },
+            backdrop = backdrop,
+            title = "启动时自动检查更新",
+            subtitle = if (settings.autoCheckUpdates) "每次启动检查一次" else "已关闭"
+        )
+
+        // 个性化：液态玻璃的观感。只影响界面渲染，与识别无关。
+        GlassCard(backdrop = backdrop) {
+            Column(Modifier.padding(20.dp)) {
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Text("个性化", color = StatusColors.text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.weight(1f))
+                    GlassChip("恢复默认", {
+                        refraction = GlassTuning.DEFAULT
+                        blurStrength = GlassTuning.DEFAULT
+                    }, backdrop)
+                }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "调的是界面玻璃的折射与模糊，纯观感，不影响识别。",
+                    color = StatusColors.dim,
+                    fontSize = 12.sp
+                )
+
+                Spacer(Modifier.height(16.dp))
+                Text("液态玻璃反射强度：%.2f".format(refraction), color = StatusColors.text)
+                Spacer(Modifier.height(14.dp))
+                LiquidSlider(
+                    value = { refraction },
+                    onValueChange = { refraction = it },
+                    valueRange = GlassTuning.MIN..GlassTuning.MAX,
+                    visibilityThreshold = 0.005f,
+                    backdrop = backdrop
+                )
+
+                Spacer(Modifier.height(20.dp))
+                Text("液态玻璃模糊强度：%.2f".format(blurStrength), color = StatusColors.text)
+                Spacer(Modifier.height(14.dp))
+                LiquidSlider(
+                    value = { blurStrength },
+                    onValueChange = { blurStrength = it },
+                    valueRange = GlassTuning.MIN..GlassTuning.MAX,
+                    visibilityThreshold = 0.005f,
+                    backdrop = backdrop
+                )
+            }
+        }
+
         PermissionListCard(
             items = hub.items(),
             backdrop = backdrop,
             onLaunch = onLaunch
         )
-
-        GlassCard(backdrop = backdrop) {
-            Column(Modifier.padding(20.dp)) {
-                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                    Text(
-                        "使用说明",
-                        color = StatusColors.text,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier
-                            .weight(1f)
-                            .clickable {
-                                val now = SystemClock.elapsedRealtime()
-                                tapCount = if (now - lastTapAt > 3000L) 1 else tapCount + 1
-                                lastTapAt = now
-                                when {
-                                    tapCount >= 5 -> {
-                                        settings.debugMode = true
-                                        tapCount = 0
-                                        debugHint = "调试模式已开启"
-                                        Toast.makeText(context, "调试模式已开启", Toast.LENGTH_SHORT).show()
-                                    }
-
-                                    tapCount >= 3 -> debugHint = "再点 ${5 - tapCount} 次开启调试模式"
-                                    else -> debugHint = null
-                                }
-                            }
-                    )
-                    (debugHint)?.let {
-                        Text(it, color = StatusColors.ok, fontSize = 11.sp)
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "1. 进入《三角洲行动》手游竞技爆破对局（手机横屏）；\n" +
-                        "2. 回到本应用，点「开始识别」并允许屏幕录制；\n" +
-                        "3. 切回游戏，香奈美会随对局阶段自动播报，悬浮窗会显示当前事件与识别状态。\n\n" +
-                        "识别按 1920×1080 宽度等比、顶对齐归一化，适配全面屏比例。" +
-                        "购买阶段打开全屏购买菜单时顶栏被遮挡，属正常现象，不影响播报。\n\n" +
-                        "（连点本标题 5 次可开启调试模式）",
-                    color = StatusColors.idle,
-                    fontSize = 13.sp
-                )
-            }
-        }
 
         if (settings.debugMode) {
             DebugCard(context, settings, backdrop, status, showsLog) { showsLog = it }
@@ -138,17 +168,71 @@ fun SettingsPage(
 
         GlassCard(backdrop = backdrop) {
             Column(Modifier.padding(20.dp)) {
-                Text("关于", color = StatusColors.text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Text(
+                        "关于",
+                        color = StatusColors.text,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        // 只有作者知道的入口：连点标题 5 次开启调试模式，界面上不做任何提示。
+                        modifier = Modifier.clickable {
+                            val now = SystemClock.elapsedRealtime()
+                            tapCount = if (now - lastTapAt > 3000L) 1 else tapCount + 1
+                            lastTapAt = now
+                            if (tapCount >= 5) {
+                                tapCount = 0
+                                settings.debugMode = true
+                            }
+                        }
+                    )
+                    Spacer(Modifier.weight(1f))
+                    Text("v${appVersion(context)}", color = StatusColors.dim, fontSize = 12.sp)
+                }
                 Spacer(Modifier.height(6.dp))
                 Text(
                     "香奈美x黑潮爆破 · 手机版\n" +
-                        "背景图为《卡拉比丘》同人/官方公开素材，仅个人使用；角色与美术版权归原权利方所有。\n" +
+                        "作者：Yiyan\n" +
+                        "许可证：GPL-2.0-or-later\n" +
+                        "识别逻辑与桌面版同源，不依赖 OBS、不注入游戏进程。",
+                    color = StatusColors.idle,
+                    fontSize = 13.sp
+                )
+
+                Spacer(Modifier.height(14.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    GlassChip("检查更新", { checkUpdate(context) { message = it } }, backdrop)
+                    GlassChip("官网", { openUrl(context, HOME_URL) }, backdrop)
+                    GlassChip("GitHub", { openUrl(context, GITHUB_URL) }, backdrop)
+                }
+                message?.let {
+                    Spacer(Modifier.height(10.dp))
+                    Text(it, color = StatusColors.ok, fontSize = 12.sp)
+                }
+
+                Spacer(Modifier.height(14.dp))
+                Text(
+                    "背景为《卡拉比丘》玩家同人插画「kanami / 你看 世界好美」（作者 鲜榨豆豆奶 / ddmilk），" +
+                        "仅作个人学习使用；角色与美术版权归原作者及原权利方所有，请勿二次分发。\n" +
                         "本应用只读屏识别对局阶段并播放本地语音，不修改游戏、不做任何自动化操作。",
                     color = StatusColors.dim,
                     fontSize = 12.sp
                 )
             }
         }
+    }
+}
+
+/** 读取本应用版本号（读取失败时给个占位，不能让"关于"页崩掉）。 */
+internal fun appVersion(context: Context): String = runCatching {
+    context.packageManager.getPackageInfo(context.packageName, 0).versionName
+}.getOrNull() ?: "?"
+
+internal fun openUrl(context: Context, url: String) {
+    runCatching {
+        context.startActivity(
+            Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
     }
 }
 

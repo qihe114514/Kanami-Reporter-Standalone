@@ -12,6 +12,7 @@ kyantShapes = "1.2.1"
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "core" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activity" }
 compose-ui = { module = "org.jetbrains.compose.ui:ui", version.ref = "compose" }
+compose-animation = { module = "org.jetbrains.compose.animation:animation", version.ref = "compose" }
 compose-foundation = { module = "org.jetbrains.compose.foundation:foundation", version.ref = "compose" }
 compose-ui-graphics = { module = "org.jetbrains.compose.ui:ui-graphics", version.ref = "compose" }
 backdrop = { group = "io.github.kyant0", name = "backdrop", version.ref = "backdrop" }

@@ -10,10 +10,13 @@
 .cxx
 keystore/
 !keystore/README.txt
-# debug 包 29MB，不入库（磁盘上仍保留在 releases/ 供实机排查）
-releases/*-debug.apk
+# 安装包走 GitHub Releases 分发，不入库（磁盘上仍保留在 releases/ 供实机排查）
+releases/*.apk
 
 # python 缓存
 tools/verification/__pycache__/
 __pycache__/
 *.pyc
+
+# 壁纸候选素材（几十 MB，需要时再取）
+.tmp-wallpaper/

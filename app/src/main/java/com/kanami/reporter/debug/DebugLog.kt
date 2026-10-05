@@ -163,25 +163,37 @@ object DebugLog {
         }
     }
 
+    /**
+     * 按天续写日志。
+     *
+     * 原来每次启动都新建一个会话文件，于是"出问题 → 重启应用 → 导出日志"导出的正好是个
+     * 只写了启动三行的新文件，真正的现场留在上一个文件里（用户看到的就是"日志里啥也没有"）。
+     * 现在同一自然日内的多次启动都追加到同一个文件，超过 [MAX_BYTES] 才顺延成 -2、-3。
+     */
     private fun openSession(context: Context? = null) {
         synchronized(lock) {
             closeSessionLocked()
             val dir = logDir ?: return
             dir.mkdirs()
             pruneOldFiles()
-            val name = "kanami-${SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())}.log"
-            val f = File(dir, name)
+            val day = SimpleDateFormat("yyyyMMdd", Locale.US).format(Date())
+            var index = 1
+            var f = File(dir, "kanami-$day.log")
+            while (f.length() >= MAX_BYTES) {
+                index++
+                f = File(dir, "kanami-$day-$index.log")
+            }
             try {
                 writer = FileWriter(f, true)
                 currentFile = f
-                bytesWritten = 0
+                bytesWritten = f.length()
             } catch (e: IOException) {
                 writer = null
                 currentFile = null
                 return
             }
         }
-        log("debug", "会话日志开始：${currentFile?.absolutePath}")
+        log("debug", "日志文件：${currentFile?.absolutePath}（同日续写）")
         context?.let { logDeviceInfo(it) }
     }
 
@@ -200,7 +212,8 @@ object DebugLog {
 
     private fun pruneOldFiles() {
         val dir = logDir ?: return
-        val files = dir.listFiles { f -> f.isFile && f.name.endsWith(".log") }?.sortedByDescending { it.name }
+        val files = dir.listFiles { f -> f.isFile && f.name.endsWith(".log") }
+            ?.sortedByDescending { it.lastModified() }
             ?: return
         files.drop(MAX_FILES).forEach { it.delete() }
     }

@@ -24,7 +24,7 @@ ReporterStateMachine        状态机（手机版优先级规则：回合结束 
       ▼
 VoicePlayer                 assets/voices 中文 MP3 播报
       ▼
-StatusHub (StateFlow)       界面 / 悬浮窗统一取数；FreezeDetector 判断"画面不动了"
+StatusHub (StateFlow)       界面 / 悬浮窗统一取数
 ```
 
 - 模板：`app/src/main/assets/templates/*.mobile.krt`（13 个状态模板 + 51 个比分数字模板）
@@ -52,18 +52,116 @@ v1.0.0 用 `resources.displayMetrics` 加 `maxOf/minOf` 强凑横屏建虚拟屏
 
 ## 界面
 
-- **背景**：香奈美立绘合成的竖屏背景（`assets/background/kanami_bg.webp`，127KB）
-- **底栏**：液态玻璃底栏（官方示例组件 vendor 到 `ui/liquid/`：胶囊玻璃 + 滑动透镜指示器 +
-  拖动切换 + 按触摸点挤压缩放与径向高亮），按钮同理，并附轻震动反馈
-- **运行页**：权限清单 → 状态卡（识别状态/回合/阵营/估算计时/比分/采集尺寸）→ 开始/停止 →
-  模板匹配值前 8
-- **设置页**：匹配阈值、悬浮窗开关、权限清单、使用说明（连点 5 次进调试模式）、调试卡、关于
+- **图标**：香奈美「MVP」表情包，与 Windows 桌面版同一张（自适应图标，前景留 6% 边距）
+- **背景**：香奈美竖屏壁纸（`assets/background/kanami_bg.webp`）
+- **底栏**：液态玻璃底栏，只占屏幕中间约七成宽，附轻震动反馈。**交互是重写过的**，见下
+- **内容区**：占满整屏，卡片可以一路滚到屏幕最顶/最底（穿过标题条与底栏，在那里被渐进模糊
+  渐隐），而不是被截断在"标题下方到 底栏上方"这段中间区域里。首尾用 Spacer 让出标题条与
+  底栏的位置，所以静止时的观感和以前一致
+- **运行页**：一张主卡包办「识别状态 + 回合/阵营/比分 + 最近播报 + 开始/停止」——
+  打开就能看见主操作，不用滚动；权限清单全开时收成一行、缺项自动展开；
+  模板匹配值默认收起。下面两张卡按需展开
+- **设置页**：匹配阈值（官方 `LiquidSlider`）、悬浮窗开关（官方 `LiquidToggle`）、
+  **个性化**（液态玻璃的反射强度 / 模糊强度，两个 `LiquidSlider`，0～2.2 倍，实时生效）、
+  权限清单、使用说明（连点 5 次进调试模式）、调试卡、关于
+- **自适应对比度**：`ui/GlassAppearance.kt` 的 `AdaptiveGlass` 从壁纸取上/中/下三段亮度，
+  背景偏亮时把 [StatusColors] 整体切到深色一套，亮壁纸下文字不再糊。因为背景是静态壁纸，
+  只在加载时算一次，**运行时零开销** —— 官方示例是每帧把 GPU 图层读回 CPU 取平均亮度，
+  那是 demo 写法，1272×2772 的图层一秒读几十次在真机上会直接拖垮帧率，不能照搬
+
+界面上所有可点控件都用官方示例组件，按压反馈一致（按触摸点挤压玻璃 + 径向高亮 + 弹回）：
+大按钮/小按钮是 `LiquidButton`，滑杆是 `LiquidSlider`，开关是 `LiquidToggle` ——
+不要再往里加自绘的按钮/滑杆/开关。
+
+### 底栏：官方实现 + 一处索引同步修正
+
+底栏是官方示例组件原样搬过来的（胶囊玻璃 + 滑动透镜指示器 + **拖动时整条底栏跟着轻微平移** +
+按住时按触摸点挤压并泛径向高光），只改了一处：
+
+官方写的是 `remember(selectedTabIndex)` —— 那个 lambda 每次重组都是新实例，会把内部 `currentIndex`
+连同它和指示器动画的同步一起重建。症状是**页面切了、底栏指示器不动**，而且停在旧位置的指示器
+盖住了那一格的点击，看起来像"点不动"。
+
+修的时候踩了个更深的坑：把 `selectedTabIndex` 保持成 `() -> Int`、只在 effect 里读它是不够的 ——
+**Compose 会把"只捕获稳定值的 lambda"记忆化**，`{ tab }` 每次重组都是同一个实例，于是整个
+`LiquidBottomTabs` 被判为"参数没变"而**跳过重组**，任何写在里面的 `LaunchedEffect`／组合期读值
+都不会被拉起。所以这里的参数改成了 `Int` **值**（`selectedTabIndex: Int`），传值才会真正触发重组；
+再用 `LaunchedEffect(值)` 驱动指示器动画。拖动结束则直接回调 `onTabSelected`。
+
+### 屏幕边缘的渐进式模糊
+
+屏幕最顶部和最底部各叠一条模糊带（`ui/ProgressiveBlurEdge.kt`，高度取状态栏/导航条高度），
+盖在系统栏区域上、向下渐隐。做法照抄官方示例 `destinations/ProgressiveBlurContent.kt` ——
+先 `blur`，再用 `runtimeShaderEffect` 按纵向坐标做 alpha mask。它是**纯 overlay，不参与布局**，
+卡片位置完全不受影响。API 33 以下没有 RuntimeShader，退化成一块纯模糊。
+
+### 其它界面约定
+
+- 应用**锁竖屏**（识别针对的是横屏游戏，本界面不需要跟着系统转）
+- 两个页面之间用 `Crossfade`（260ms）过渡，不硬切
+- 「必须权限」「模板匹配值」折叠卡片的展开/收起有 `AnimatedVisibility` 动画
+
+## 竖屏 / 横屏：应用内"暂不匹配"是正常的
+
+只对横屏帧做模板匹配（手机 HUD 是横屏布局）。**在应用内点「开始识别」时手机还是竖屏，
+这是正常的**：采集会立刻跑起来，只是不做匹配。切回游戏（横屏）后，采集面会按新尺寸自动重建，
+自动开始识别，**不需要重新授权**。三条触发路径都接了：`onCapturedContentResize`（Android 14+）、
+`DisplayListener.onDisplayChanged`、`Service.onConfigurationChanged`。
+
+为了让这件事在界面上说得明白：
+
+- 竖屏期间状态是「采集运行中 · 切回游戏后自动识别」（不再写成"暂不匹配"那种像故障的话），
+  状态卡里同时显示「已采集 N 帧」，可以确认采集真的在跑
+- **完全不做"画面有没有在动"这类健康度检测**（2026-10-06 用户要求彻底去掉）。
+  游戏卡住、加载中、停在桌面、看菜单，画面本来就不动 —— 不算故障；
+  而且 **MediaProjection 只在屏幕内容发生变化时才投递帧**，画面静止时"收不到帧"同样是正常的。
+  实测：在应用内点「开始识别」后只收到 1 帧就再也没有了，那是因为屏幕没变，不是采集断了。
+  所以界面上只报「已采集 N 帧」，不报帧率、也不报"停摆"。真正需要知道的异常只有
+  `capture.error`（采集抛异常）和录屏授权被系统回收（`MediaProjection.Callback.onStop`）
+
+## 采集启动链路全程可见
+
+点「开始识别」后每一步都有反馈，失败也一样：
+
+- 授权被取消 / 服务启动失败 / 没拿到授权数据 / 系统没返回录屏会话 / 采集面创建失败
+  → 运行页状态卡直接显示原因（红色警示色），并写进日志
+- 成功 → 显示"采集已启动；悬浮窗已显示…"，之后状态卡持续显示已采集帧数
+
+授权结果不再靠 Intent extra 传递：Android 13+ 上 `Intent.getParcelableExtra(name)` 取 `Intent`
+类型的 extra 在部分系统版本上会返回 null，服务于是拿到空授权、静默 `stopSelf` ——
+表现正好是「授权完什么都没发生、也没有悬浮窗」。现在走同进程的 `ProjectionHandoff`，
+Intent extra 只作兜底。
+
+### 启动顺序：两个方向的校验互相咬合，只有一个顺序能过
+
+Android 14+ 对这条链路有**两个相反方向**的校验（2026-10-06 两个方向都实测撞过）：
+
+| 调用 | 它检查什么 |
+| --- | --- |
+| `startForeground(type = mediaProjection)` | 调用方**已经**持有录屏授权（appop `PROJECT_MEDIA`）。缺失时报 `Starting FGS with type mediaProjection ... requires permissions [...]` |
+| `getMediaProjection()` | 调用方**已经**有该类型的前台服务在跑。缺失时报 `Media projections require a foreground service of type ... MEDIA_PROJECTION` |
+
+`PROJECT_MEDIA` 是用户在录屏授权弹窗里点「开始录制」时授予的，不需要先调
+`getMediaProjection`，所以**授权完立刻 `startForeground` 是通的**。唯一可行顺序：
+
+```
+startForeground(NOTIFICATION_ID, notif, TYPE_MEDIA_PROJECTION)
+    → getMediaProjection(resultCode, resultData)
+    → registerCallback(...)
+    → createVirtualDisplay(...)
+```
+
+5 秒死线不冲突：所有失败分支都在超时之前 `stopSelf()`，系统不会判 ANR。
+
+服务用 `START_NOT_STICKY`：录屏授权不能跨进程恢复，进程被杀后系统拉起来的服务一定过不了
+`startForeground`（日志里那条 `Starting FGS ... requires permissions` 就是系统重启服务的结果），
+只会白写一条失败日志。
 
 ## 悬浮窗
 
 由识别服务托管：点「开始识别」出现，点「停止」移除，设置里可整体关闭。
 
-- **主悬浮窗**：收起时是 48dp 半透明小胶囊（绿=识别中/黄=画面不动了或采集异常/灰=未识别），
+- **主悬浮窗**：收起时是 48dp 半透明小胶囊（绿=识别中/黄=采集异常/灰=未识别），
   展开显示状态名、回合/阵营/估算计时、最近播报、采集尺寸与帧率。可拖动（位置会记住），点一下收起/展开。
 - **调试悬浮窗**（调试模式开启时叠加）：比分（读屏/估算）、攻守、估算计时、模板匹配值排序（前 8）、
   采集尺寸、当前前台应用。
@@ -86,8 +184,12 @@ v1.0.0 用 `resources.displayMetrics` 加 `maxOf/minOf` 强凑横屏建虚拟屏
 
 设置页「使用说明」标题**连点 5 次**开启（第 3 次起会提示还差几次）。开启后：
 
-- 日志写进应用私有目录 `files/logs/kanami-<时间戳>.log`：设备与面板信息、每次采集几何重建、
-  节流后的帧行、前 8 模板分数、每次状态迁移与语音、冻结进出、全部异常、前台应用变化
+- **未捕获异常**（含崩溃栈）也会写进同一份日志，前缀 `[crash]` —— 实机上的"点一下就闪退"
+  以前只能靠猜崩溃前最后一条日志落在哪个区间，现在能直接看到类型和行号
+- 日志写进应用私有目录 `files/logs/kanami-<YYYYMMDD>.log`：设备与面板信息、每次采集几何重建、
+  节流后的帧行、前 8 模板分数、每次状态迁移与语音、冻结进出、全部异常、前台应用变化。
+  **按自然日续写**（同一天多次启动追加到同一个文件），这样"出问题 → 重启 → 导出"拿到的仍然是
+  完整现场；单文件超过 8MB 才顺延成 `-2`、`-3`
 - 日志卡里可查看尾部日志、分享（文本）、**导出到下载目录**（Android 11+ 文件管理器进不去
   `Android/data`，这是取日志的通道）、清空日志
 - 「保存当前帧」会把下一帧写成两张 PNG 到 `files/debug/`：原始采集帧 + **归一化帧**
@@ -121,8 +223,13 @@ JAVA_HOME=<JDK17+> ./gradlew :app:assembleDebug     # 或 assembleRelease（用 
 
 ## 素材来源
 
-- 背景立绘：卡拉彼丘 Wiki（BWiki）公开素材「香奈美-初始立绘」，合成为竖屏背景，**仅个人使用**；
-  角色与美术版权归原权利方所有。
-- 液态玻璃组件：`ui/liquid/` 下 6 个文件 vendor 自
-  [Kyant0/AndroidLiquidGlass](https://github.com/Kyant0/AndroidLiquidGlass) tag `2.0.1`
-  的示例代码（Apache-2.0），已标注来源与改动。
+- 背景壁纸：玩家同人插画「kanami / 你看 世界好美」，作者 **鲜榨豆豆奶（ddmilk）**，
+  原发米游社 <https://www.miyoushe.com/sr/article/56620673>（Pixiv 同名作者）。
+  原图 2600×4600，裁成 1080×2340 后转 WebP（约 200KB）。
+  **版权归原作者所有，此处仅作个人使用，不要再分发。**
+- 应用图标：香奈美「MVP」表情包，与 Windows 桌面版同一张
+  （`Kanami-Reporter-Standalone/artifacts/icon-candidates/kanami-01.png`），同样**仅个人使用**。
+- 液态玻璃组件：`ui/liquid/` 下 8 个文件（底栏 2 + 按钮 + 滑杆 + 开关 + 3 个动效工具）
+  vendor 自 [Kyant0/AndroidLiquidGlass](https://github.com/Kyant0/AndroidLiquidGlass) tag `2.0.1`
+  的示例代码（Apache-2.0），已标注来源与改动；`LiquidBottomTabs` 的交互层由本项目重写，
+  文件头注明了原因。

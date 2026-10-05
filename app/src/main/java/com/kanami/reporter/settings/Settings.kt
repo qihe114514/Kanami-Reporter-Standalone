@@ -57,6 +57,21 @@ class Settings(context: Context) {
         get() = prefs.getInt(KEY_DEBUG_Y, -1)
         set(value) = prefs.edit().putInt(KEY_DEBUG_Y, value).also { it.apply() }.let { bump() }
 
+    /** 液态玻璃折射/反射强度倍率（1 = 默认）。 */
+    var glassRefraction: Float
+        get() = prefs.getFloat(KEY_GLASS_REFRACTION, 1f)
+        set(value) = prefs.edit().putFloat(KEY_GLASS_REFRACTION, value).also { it.apply() }.let { bump() }
+
+    /** 液态玻璃模糊强度倍率（1 = 默认）。 */
+    var glassBlur: Float
+        get() = prefs.getFloat(KEY_GLASS_BLUR, 1f)
+        set(value) = prefs.edit().putFloat(KEY_GLASS_BLUR, value).also { it.apply() }.let { bump() }
+
+    /** 启动时自动检查更新（与桌面端同名设置项）。 */
+    var autoCheckUpdates: Boolean
+        get() = prefs.getBoolean(KEY_AUTO_CHECK_UPDATES, true)
+        set(value) = prefs.edit().putBoolean(KEY_AUTO_CHECK_UPDATES, value).also { it.apply() }.let { bump() }
+
     /** 首次启动引导（权限清单）是否已展示过。 */
     var firstRunDone: Boolean
         get() = prefs.getBoolean(KEY_FIRST_RUN_DONE, false)
@@ -75,6 +90,9 @@ class Settings(context: Context) {
         const val KEY_OVERLAY_Y = "overlay_y"
         const val KEY_DEBUG_X = "debug_overlay_x"
         const val KEY_DEBUG_Y = "debug_overlay_y"
+        const val KEY_GLASS_REFRACTION = "glass_refraction"
+        const val KEY_GLASS_BLUR = "glass_blur"
+        const val KEY_AUTO_CHECK_UPDATES = "auto_check_updates"
         const val KEY_FIRST_RUN_DONE = "first_run_done"
     }
 }

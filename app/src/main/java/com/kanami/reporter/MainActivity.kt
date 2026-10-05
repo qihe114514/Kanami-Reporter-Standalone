@@ -5,12 +5,13 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.BitmapFactory
 import android.media.projection.MediaProjectionManager
-import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -18,11 +19,14 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -32,6 +36,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -42,14 +47,18 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import com.kanami.reporter.capture.CaptureService
+import com.kanami.reporter.capture.ProjectionHandoff
 import com.kanami.reporter.debug.DebugLog
 import com.kanami.reporter.permissions.PermissionHub
 import com.kanami.reporter.settings.Settings
 import com.kanami.reporter.status.StatusHub
+import com.kanami.reporter.ui.AdaptiveGlass
+import com.kanami.reporter.ui.ControlCard
 import com.kanami.reporter.ui.PermissionListCard
+import com.kanami.reporter.ui.ProgressiveBlurEdge
 import com.kanami.reporter.ui.ScoreListCard
-import com.kanami.reporter.ui.StatusCard
 import com.kanami.reporter.ui.StatusColors
 import com.kanami.reporter.ui.Text
 import com.kanami.reporter.ui.rememberHapticTick
@@ -59,6 +68,7 @@ import com.kanami.reporter.ui.liquid.LiquidButton
 import com.kanami.reporter.ui.liquid.TabIcon
 import com.kanami.reporter.ui.liquid.TabIconKind
 import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberCombinedBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 
 class MainActivity : ComponentActivity() {
@@ -118,33 +128,40 @@ class MainActivity : ComponentActivity() {
         val settingsRevision by settings.revisions.collectAsState()
         var tab by remember { mutableIntStateOf(0) }
 
-        // 玻璃数据源：记录根布局背景，玻璃组件从中采样折射
+        // 玻璃数据源：壁纸层供玻璃卡片折射；滚动内容层供上下边缘的渐进式模糊折射
         val backdrop = rememberLayerBackdrop()
+        val scrollBackdrop = rememberLayerBackdrop()
+        // 顺序 = (下层, 上层)：壁纸在下、滚动内容在上
+        val edgeBackdrop = rememberCombinedBackdrop(backdrop, scrollBackdrop)
+        val systemBars = WindowInsets.systemBars.asPaddingValues()
+        val statusBarHeight = systemBars.calculateTopPadding()
+        val navigationBarHeight = systemBars.calculateBottomPadding()
+        // 标题条 / 底栏各自占的高度（含它们自己的内边距）。用固定值而不是实测：
+        // 实测要等首帧，会让内容先闪一下再归位。
+        val titleBarHeight = statusBarHeight + 64.dp
+        val bottomBarHeight = navigationBarHeight + 80.dp
 
         Box(Modifier.fillMaxSize()) {
             AppBackground(context, backdrop)
 
+            // 内容层占满整屏：卡片可以一路滚到屏幕最顶/最底（穿过标题与底栏），
+            // 而不是被截断在"标题下方到 底栏上方"这段中间区域里。
+            // 首尾用 Spacer 让出标题条与底栏的位置，所以静止时的观感和以前一致。
             Column(
                 Modifier
                     .fillMaxSize()
-                    .systemBarsPadding()
+                    .layerBackdrop(scrollBackdrop)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp)
             ) {
-                Text(
-                    "香奈美x黑潮爆破",
-                    color = StatusColors.text,
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp)
-                )
-
-                Column(
-                    Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 20.dp)
-                ) {
-                    if (tab == 0) {
+                Spacer(Modifier.height(titleBarHeight))
+                // 两个页面之间做交叉淡入淡出，别硬切
+                Crossfade(
+                    targetState = tab,
+                    animationSpec = tween(durationMillis = 260),
+                    label = "tab-content"
+                ) { current ->
+                    if (current == 0) {
                         RunPage(
                             context = context,
                             settings = settings,
@@ -166,9 +183,54 @@ class MainActivity : ComponentActivity() {
                             onLaunch = { intent -> launchSafely(intent, hub.appDetailsIntent()) }
                         )
                     }
-                    Spacer(Modifier.height(96.dp))
                 }
+                Spacer(Modifier.height(bottomBarHeight + 16.dp))
+            }
 
+            // 顶部 / 底部渐进式模糊：画在内容之上、标题与底栏之下，所以标题文字始终清晰。
+            //
+            // 这里把两件事分开控制（上一版把它们混成一件，结果"开始得早"就必然"过渡很短"，
+            // 看着像硬切）：
+            //   edgeHeight —— 渐变总共多长，越长越柔和；
+            //   fadeEnd    —— "完全不模糊"落在模糊带的哪个比例处，越小越早进入模糊。
+            // 现在高度都放大、fadeEnd 都压小：很早就开始虚化，而且过渡很长。
+            ProgressiveBlurEdge(
+                backdrop = edgeBackdrop,
+                fromTop = true,
+                edgeHeight = titleBarHeight + 72.dp,
+                fadeEnd = 0.28f,
+                modifier = Modifier.align(Alignment.TopCenter)
+            )
+            ProgressiveBlurEdge(
+                backdrop = edgeBackdrop,
+                fromTop = false,
+                edgeHeight = bottomBarHeight + 80.dp,
+                fadeEnd = 0.30f,
+                modifier = Modifier.align(Alignment.BottomCenter)
+            )
+
+            // 标题条与底栏固定在屏幕两端，盖在内容之上
+            Box(
+                Modifier
+                    .align(Alignment.TopStart)
+                    .fillMaxWidth()
+                    .systemBarsPadding()
+            ) {
+                Text(
+                    "香奈美x黑潮爆破",
+                    color = StatusColors.text,
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp)
+                )
+            }
+
+            Box(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .systemBarsPadding()
+            ) {
                 BottomBar(
                     tab = tab,
                     onSelect = { tab = it },
@@ -189,7 +251,10 @@ class MainActivity : ComponentActivity() {
             val wallpaper = remember {
                 runCatching {
                     context.assets.open("background/kanami_bg.webp").use { BitmapFactory.decodeStream(it) }
-                }.getOrNull()?.asImageBitmap()
+                }.getOrNull()?.also {
+                    // 顺手算一次背景亮度，决定文字走浅色还是深色（静态壁纸只需算这一次）
+                    AdaptiveGlass.updateFromWallpaper(it)
+                }?.asImageBitmap()
             }
             if (wallpaper != null) {
                 Image(
@@ -235,31 +300,37 @@ class MainActivity : ComponentActivity() {
         backdrop: com.kyant.backdrop.backdrops.LayerBackdrop
     ) {
         val haptic = rememberHapticTick()
-        LiquidBottomTabs(
-            selectedTabIndex = { tab },
-            onTabSelected = {
-                haptic()
-                onSelect(it)
-            },
-            backdrop = backdrop,
-            tabsCount = 2,
-            modifier = Modifier
+        Box(
+            Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 8.dp)
+                .padding(vertical = 8.dp),
+            contentAlignment = Alignment.Center
         ) {
-            LiquidBottomTab({
-                haptic()
-                onSelect(0)
-            }) {
-                TabIcon(TabIconKind.Run, StatusColors.text, Modifier.size(22.dp))
-                Text("运行", color = StatusColors.text, fontSize = 11.sp)
-            }
-            LiquidBottomTab({
-                haptic()
-                onSelect(1)
-            }) {
-                TabIcon(TabIconKind.Settings, StatusColors.text, Modifier.size(22.dp))
-                Text("设置", color = StatusColors.text, fontSize = 11.sp)
+            LiquidBottomTabs(
+                selectedTabIndex = tab,
+                onTabSelected = {
+                    haptic()
+                    onSelect(it)
+                },
+                backdrop = backdrop,
+                tabsCount = 2,
+                // 只占屏幕中间约七成宽：胶囊底栏不必铺满整行。高度、图标与文字尺寸都不变。
+                modifier = Modifier.fillMaxWidth(0.7f)
+            ) {
+                LiquidBottomTab({
+                    haptic()
+                    onSelect(0)
+                }) {
+                    TabIcon(TabIconKind.Run, StatusColors.text, Modifier.size(22.dp))
+                    Text("运行", color = StatusColors.text, fontSize = 11.sp)
+                }
+                LiquidBottomTab({
+                    haptic()
+                    onSelect(1)
+                }) {
+                    TabIcon(TabIconKind.Settings, StatusColors.text, Modifier.size(22.dp))
+                    Text("设置", color = StatusColors.text, fontSize = 11.sp)
+                }
             }
         }
     }
@@ -279,62 +350,65 @@ class MainActivity : ComponentActivity() {
         ) { result ->
             val data = result.data
             if (result.resultCode == RESULT_OK && data != null) {
+                // 同一进程直接交接引用，绕开 Android 13+ Intent extra 取 Parcelable 的老坑
+                ProjectionHandoff.put(result.resultCode, data)
                 val intent = Intent(context, CaptureService::class.java)
                     .putExtra(CaptureService.EXTRA_RESULT_CODE, result.resultCode)
                     .putExtra(CaptureService.EXTRA_RESULT_DATA, data)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    context.startForegroundService(intent)
-                } else {
-                    context.startService(intent)
+                val started = try {
+                    ContextCompat.startForegroundService(context, intent)
+                    true
+                } catch (e: Exception) {
+                    DebugLog.log("ui", "启动采集服务失败：${e.javaClass.simpleName}: ${e.message}")
+                    StatusHub.setNotice("启动采集服务失败：${e.message}", error = true)
+                    false
                 }
-                DebugLog.log("ui", "已请求开始识别")
+                if (started) {
+                    StatusHub.setNotice("录屏授权已通过，正在启动采集…")
+                    DebugLog.log("ui", "已请求开始识别（resultCode=${result.resultCode}）")
+                }
             } else {
-                DebugLog.log("ui", "用户取消了录屏授权")
+                DebugLog.log("ui", "用户取消了录屏授权（resultCode=${result.resultCode}）")
+                StatusHub.setNotice("没有拿到录屏授权，识别未启动", error = true)
             }
         }
 
-        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            val haptic = rememberHapticTick()
+        val haptic = rememberHapticTick()
+        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            // 主卡：状态 + 对局信息 + 开始/停止，一屏之内看完
+            ControlCard(
+                status = status,
+                templateCount = engine.loadedTemplateCount,
+                backdrop = backdrop,
+                onStart = {
+                    haptic()
+                    StatusHub.setNotice("正在请求录屏授权…")
+                    DebugLog.log("ui", "点开始识别，拉起录屏授权")
+                    val manager =
+                        context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                    try {
+                        projectionLauncher.launch(manager.createScreenCaptureIntent())
+                    } catch (e: Exception) {
+                        DebugLog.log("ui", "拉起录屏授权失败：${e.javaClass.simpleName}: ${e.message}")
+                        StatusHub.setNotice("拉起录屏授权失败：${e.message}", error = true)
+                    }
+                },
+                onStop = {
+                    haptic()
+                    context.stopService(Intent(context, CaptureService::class.java))
+                    StatusHub.setNotice("已请求停止识别")
+                    DebugLog.log("ui", "已请求停止识别")
+                }
+            )
+
+            // 权限：全开时收成一行，缺项自动展开
             PermissionListCard(
                 items = remember(resumeTick, status.running) { hub.items() },
                 backdrop = backdrop,
                 onLaunch = { intent -> launchSafely(intent, hub.appDetailsIntent()) }
             )
 
-            StatusCard(status = status, templateCount = engine.loadedTemplateCount, backdrop = backdrop)
-
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                LiquidButton(
-                    onClick = {
-                        haptic()
-                        val manager =
-                            context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-                        projectionLauncher.launch(manager.createScreenCaptureIntent())
-                    },
-                    backdrop = backdrop
-                ) {
-                    Text("开始识别", color = StatusColors.text)
-                }
-                LiquidButton(
-                    onClick = {
-                        haptic()
-                        context.stopService(Intent(context, CaptureService::class.java))
-                        DebugLog.log("ui", "已请求停止识别")
-                    },
-                    backdrop = backdrop
-                ) {
-                    Text("停止", color = Color(0xFFFFD9D9))
-                }
-            }
-
-            if (!hub.overlayGranted()) {
-                Text(
-                    "提示：悬浮窗权限未开启，游戏内不会显示实时状态（识别本身仍可用）。",
-                    color = StatusColors.warn,
-                    fontSize = 12.sp
-                )
-            }
-
+            // 调试信息，默认收起
             ScoreListCard(status = status, backdrop = backdrop)
         }
     }

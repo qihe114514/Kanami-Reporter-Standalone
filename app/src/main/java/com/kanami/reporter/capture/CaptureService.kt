@@ -22,6 +22,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.DisplayMetrics
 import android.view.Display
+import androidx.core.content.IntentCompat
 import com.kanami.reporter.KanamiApp
 import com.kanami.reporter.R
 import com.kanami.reporter.audio.VoicePlayer
@@ -68,8 +69,8 @@ class CaptureService : Service() {
         private const val REBUILD_MIN_INTERVAL_MS = 300L
         private const val STATUS_MIN_INTERVAL_MS = 200L
         private const val FPS_WINDOW_MS = 2000L
-        private const val FREEZE_WATCHDOG_MS = 800L
-        private const val MAX_IMAGES = 4
+        /** 只留 2 张：每张 RGBA_8888 缓冲就是 14MB，4 张会白占几十 MB。 */
+        private const val MAX_IMAGES = 2
     }
 
     private var projection: MediaProjection? = null
@@ -85,13 +86,19 @@ class CaptureService : Service() {
     private lateinit var settings: Settings
     private var overlay: OverlayController? = null
 
-    private val freezeDetector = FreezeDetector()
     private val mainHandler = Handler(Looper.getMainLooper())
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val delayedRebuild = Runnable { ensureDisplaySize(force = true) }
 
     private var lastProcessedAt = 0L
     private var processing = false
+    private var stopped = false
+
+    /** 被节流丢掉的帧数（收走并关闭，不是留着不管）。 */
+    private var droppedFrames = 0L
+
+    /** 复用的一帧 RGBA 缓冲（只在采集线程访问）。 */
+    private var pixelBuffer: ByteArray? = null
 
     private var frameCount = 0L
     private var fpsWindowStart = 0L
@@ -99,25 +106,9 @@ class CaptureService : Service() {
     private var currentFps = 0
 
     private var lastStatusAt = 0L
-    private var lastFrozen = false
-    private var lastFrozenReason: String? = null
     private var lastStateLabel = ""
     private var lastRebuildAtMs = 0L
     private var loggedFrames = 0
-
-    /**
-     * 冻结看门狗。**跑在采集线程上**：帧回调和它都会读写 FreezeDetector 的抽样缓冲，
-     * 放在同一个线程就不需要加锁；采集线程即使没有帧也活着（是我们自己的 HandlerThread）。
-     */
-    private val watchdog = object : Runnable {
-        override fun run() {
-            if (imageReader != null) {
-                val state = freezeDetector.onNoFrame(SystemClock.elapsedRealtime())
-                maybePublishFreeze(state)
-            }
-            workerHandler?.postDelayed(this, FREEZE_WATCHDOG_MS)
-        }
-    }
 
     private val displayListener = object : DisplayManager.DisplayListener {
         override fun onDisplayAdded(displayId: Int) = Unit
@@ -145,11 +136,24 @@ class CaptureService : Service() {
 
     private val frameListener = ImageReader.OnImageAvailableListener { reader ->
         val wallNow = System.currentTimeMillis()
-        if (processing || wallNow - lastProcessedAt < TARGET_FPS_MS) return@OnImageAvailableListener
+        val nowElapsed = SystemClock.elapsedRealtime()
+        if (processing || nowElapsed - lastProcessedAt < TARGET_FPS_MS) {
+            // 丢帧也必须把图像收走！
+            //
+            // ImageReader 的空闲 buffer 数是固定的（MAX_IMAGES）。以前这里直接 return，
+            // 被节流丢掉的那些帧就一直以 "已入队未取走" 的状态占着 buffer；占满之后 producer
+            // 再也拿不到空位，onImageAvailable 就彻底不再触发 —— 采集看起来"死了"。
+            // acquireLatestImage() 会把队列里其余图像一并关闭，正好用来清空。
+            // 症状完全对得上：只有屏幕旋转/重建采集面（换了新 ImageReader，自带新 buffer）
+            // 之后才会再蹦出几帧，然后又不涨了。
+            reader.acquireLatestImage()?.close()
+            droppedFrames++
+            return@OnImageAvailableListener
+        }
         processing = true
-        lastProcessedAt = wallNow
+        lastProcessedAt = nowElapsed
         var image: Image? = null
-        val startedAt = SystemClock.elapsedRealtime()
+        val startedAt = nowElapsed
         try {
             image = reader.acquireLatestImage() ?: return@OnImageAvailableListener
             val width = image.width
@@ -165,9 +169,8 @@ class CaptureService : Service() {
 
             val landscape = width >= height
             val detection = if (landscape) engine.processFrame(rgba, width, height, wallNow) else null
-            val freeze = freezeDetector.onFrame(rgba, width, height, SystemClock.elapsedRealtime())
             maybeDumpFrame(rgba, width, height)
-            publishFrame(width, height, landscape, detection, freeze, SystemClock.elapsedRealtime() - startedAt)
+            publishFrame(width, height, landscape, detection, SystemClock.elapsedRealtime() - startedAt)
         } catch (e: Exception) {
             DebugLog.log("capture", "帧处理异常：${e.javaClass.simpleName}: ${e.message}")
             StatusHub.setCaptureError("${e.javaClass.simpleName}: ${e.message}")
@@ -205,51 +208,119 @@ class CaptureService : Service() {
         DebugLog.log("capture", "采集服务已创建")
     }
 
+    /**
+     * 启动顺序是 Android 14+ 的硬约束，**两个方向的要求互相咬合**，只有一个顺序能过：
+     *
+     * - `startForeground(type = mediaProjection)` 要求调用方已持有录屏授权（appop `PROJECT_MEDIA`），
+     *   这个 appop 是用户刚才在授权弹窗里点「开始录制」时授予的，所以**授权完立刻调用是通的**；
+     * - `getMediaProjection()` 反过来要求**已经**有一个该类型的前台服务在跑。
+     *
+     * 于是唯一可行顺序是：`startForeground` → `getMediaProjection` → `registerCallback`
+     * → `createVirtualDisplay`。反过来写会得到
+     * "Media projections require a foreground service of type ... MEDIA_PROJECTION"。
+     *
+     * 5 秒死线不冲突：下面所有失败分支都在超时之前 `stopSelf()`，系统不会判 ANR。
+     */
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, 0) ?: 0
-        val resultData = intent?.getParcelableExtra<Intent>(EXTRA_RESULT_DATA)
+        val foregroundOk = try {
+            startForeground(
+                NOTIFICATION_ID, buildNotification(),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            )
+            true
+        } catch (e: Exception) {
+            DebugLog.log("capture", "进入前台服务失败：${e.javaClass.simpleName}: ${e.message}")
+            false
+        }
+
+        // 授权数据优先取进程内交接（见 ProjectionHandoff 里对 Android 13+ getParcelableExtra 的说明）
+        val handoff = ProjectionHandoff.take()
+        val resultCode = handoff?.first ?: intent?.getIntExtra(EXTRA_RESULT_CODE, 0) ?: 0
+        val resultData = handoff?.second
+            ?: intent?.let { IntentCompat.getParcelableExtra(it, EXTRA_RESULT_DATA, Intent::class.java) }
+
         if (resultData == null) {
-            DebugLog.log("capture", "缺少录屏授权数据，退出")
+            fail("没有拿到录屏授权，请重新点「开始识别」")
             stopSelf()
             return START_NOT_STICKY
         }
-
-        startForeground(
-            NOTIFICATION_ID, buildNotification(),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-        )
+        if (!foregroundOk) {
+            fail("无法进入前台服务（多半是录屏授权已失效），请重新点「开始识别」")
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        DebugLog.log("capture", "收到录屏授权：resultCode=$resultCode，来源=${if (handoff != null) "进程内交接" else "Intent extra"}")
 
         val manager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        val mp = manager.getMediaProjection(resultCode, resultData)
+        val mp = try {
+            manager.getMediaProjection(resultCode, resultData)
+        } catch (e: Exception) {
+            DebugLog.log("capture", "getMediaProjection 异常：${e.javaClass.simpleName}: ${e.message}")
+            null
+        }
         if (mp == null) {
-            DebugLog.log("capture", "getMediaProjection 返回 null，退出")
+            fail("系统没有返回录屏会话，请重新点「开始识别」")
             stopSelf()
             return START_NOT_STICKY
         }
-        projection = mp
-        mp.registerCallback(projectionCallback, mainHandler)
 
-        displayManager = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
-        if (!displayListenerRegistered) {
-            displayManager?.registerDisplayListener(displayListener, mainHandler)
-            displayListenerRegistered = true
+        projection = mp
+        try {
+            mp.registerCallback(projectionCallback, mainHandler)
+        } catch (e: Exception) {
+            DebugLog.log("capture", "注册录屏回调失败：${e.javaClass.simpleName}: ${e.message}")
         }
 
-        workerThread = HandlerThread("kanami-capture").also { it.start() }
-        workerHandler = Handler(workerThread!!.looper)
+        // 从这里开始整段兜住：任何一步抛异常都要留下原因，而不是变成一个没有栈的"闪退"。
+        try {
+            displayManager = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+            if (!displayListenerRegistered) {
+                displayManager?.registerDisplayListener(displayListener, mainHandler)
+                displayListenerRegistered = true
+            }
 
-        engine.start()
-        engine.threshold = settings.threshold
-        StatusHub.reset(running = true)
-        loggedFrames = 0
-        freezeDetector.reset()
-        ensureDisplaySize(force = true)
+            workerThread = HandlerThread("kanami-capture").also { it.start() }
+            workerHandler = Handler(workerThread!!.looper)
 
-        overlay = OverlayController(this, settings).also { it.attach() }
+            engine.start()
+            engine.threshold = settings.threshold
+            StatusHub.reset(running = true)
+            loggedFrames = 0
+            DebugLog.log("capture", "准备采集面（面板 ${realDisplayMetrics()?.let { "${it.widthPixels}x${it.heightPixels}" } ?: "未知"}）")
+            ensureDisplaySize(force = true)
+            DebugLog.log("capture", "采集面就绪，创建悬浮窗")
 
-        workerHandler?.postDelayed(watchdog, FREEZE_WATCHDOG_MS)
-        DebugLog.log("capture", "开始识别：模板 ${engine.loadedTemplateCount} 个（含比分 ${engine.loadedScoreTemplateCount} 个）")
-        return START_STICKY
+            val controller = OverlayController(this, settings).also { overlay = it }
+            val overlayShown = controller.attach()
+            val overlayReason = controller.lastError
+            StatusHub.setNotice(
+                if (overlayShown) {
+                    "采集已启动；悬浮窗已显示，可拖到顺手的位置"
+                } else {
+                    "采集已启动，但悬浮窗没显示：${overlayReason ?: "未知原因"}"
+                },
+                // 用户自己关掉的不算问题；他开着却出不来才要提醒
+                error = !overlayShown && settings.showOverlay
+            )
+
+            DebugLog.log("capture", "开始识别：模板 ${engine.loadedTemplateCount} 个（含比分 ${engine.loadedScoreTemplateCount} 个）")
+        } catch (e: Exception) {
+            DebugLog.log("capture", "启动异常：${e.javaClass.simpleName}: ${e.message}\n${e.stackTraceToString()}")
+            fail("启动采集时出错（${e.javaClass.simpleName}: ${e.message}）")
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        // 不用 START_STICKY：录屏授权不能跨进程恢复，进程被杀后系统拉起来的服务
+        // 一定过不了 startForeground（日志里那次 "Starting FGS ... requires permissions"
+        // 就是系统重启服务的结果），只会白写一条失败日志。
+        return START_NOT_STICKY
+    }
+
+    /** 启动链路失败：写日志 + 把原因推到界面上，别让用户对着一个安静的应用发呆。 */
+    private fun fail(message: String) {
+        DebugLog.log("capture", "启动失败：$message")
+        StatusHub.reset(running = false)
+        StatusHub.setNotice("识别启动失败：$message", error = true)
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -310,11 +381,27 @@ class CaptureService : Service() {
         val oldReader = imageReader
         val vd = virtualDisplay
         if (vd == null) {
-            virtualDisplay = projection?.createVirtualDisplay(
-                "KanamiCapture", width, height, densityDpi,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                newReader.surface, null, handler
-            )
+            // 首次建面失败是真致命（采集起不来），而且这里最常见的成因是录屏授权已被系统回收，
+            // 必须让用户知道原因，否则就是"点了开始识别什么都没有"。
+            val created = try {
+                projection?.createVirtualDisplay(
+                    "KanamiCapture", width, height, densityDpi,
+                    DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                    newReader.surface, null, handler
+                )
+            } catch (e: Exception) {
+                DebugLog.log("capture", "创建采集面异常：${e.javaClass.simpleName}: ${e.message}")
+                null
+            }
+            if (created == null) {
+                newReader.close()
+                DebugLog.log("capture", "创建采集面失败，采集无法开始")
+                StatusHub.setCaptureError("创建采集面失败（录屏授权可能已失效）")
+                StatusHub.setNotice("采集面创建失败，请在「运行」页重新点「开始识别」", error = true)
+                mainHandler.post { stopSelf() }
+                return
+            }
+            virtualDisplay = created
         } else {
             try {
                 vd.resize(width, height, densityDpi)
@@ -326,7 +413,6 @@ class CaptureService : Service() {
         }
         imageReader = newReader
         oldReader?.close()
-        freezeDetector.reset()
         loggedFrames = 0
 
         DebugLog.log(
@@ -347,15 +433,25 @@ class CaptureService : Service() {
 
     // ---------- 帧处理 ----------
 
-    /** 把 ImageReader 的 plane 拷成紧凑 RGBA 字节数组（处理 rowStride 行填充）。 */
+    /**
+     * 把 ImageReader 的 plane 拷成紧凑 RGBA 字节数组（处理 rowStride 行填充）。
+     *
+     * 缓冲复用：这块手机 1272×2772 一帧就是 14MB，按 15fps 每帧 new 一个等于每秒两百多 MB 的垃圾，
+     * 全都要 GC 去收。采集线程独占这个缓冲，不需要加锁。
+     */
     private fun copyPixels(image: Image, width: Int, height: Int): ByteArray? {
         if (width <= 0 || height <= 0) return null
         val plane = image.planes.firstOrNull() ?: return null
         val buffer = plane.buffer
         val rowStride = plane.rowStride
         val pixelStride = plane.pixelStride
-        val bytes = ByteArray(width * height * 4)
-        if (pixelStride == 4 && rowStride == width * 4 && buffer.remaining() >= bytes.size) {
+        val needed = width * height * 4
+        val bytes = if (pixelBuffer?.size == needed) {
+            pixelBuffer!!
+        } else {
+            ByteArray(needed).also { pixelBuffer = it }
+        }
+        if (pixelStride == 4 && rowStride == width * 4 && buffer.remaining() >= needed) {
             buffer.get(bytes)
             return bytes
         }
@@ -404,7 +500,6 @@ class CaptureService : Service() {
         height: Int,
         landscape: Boolean,
         detection: RecognitionEngine.Detection?,
-        freeze: FreezeDetector.State,
         costMs: Long
     ) {
         val nowElapsed = SystemClock.elapsedRealtime()
@@ -416,10 +511,8 @@ class CaptureService : Service() {
         }
 
         DebugLog.logThrottled("frame", 2000L, "capture") {
-            "帧 #$frameCount ${width}x$height 处理 ${costMs}ms fps=$currentFps " +
-                "动的度量 meanAbs=${"%.2f".format(freezeDetector.lastMeanAbsDiff)}" +
-                " changed=${"%.4f".format(freezeDetector.lastChangedFraction)}" +
-                " 静止=${freeze.frozenForMs / 1000}s 横屏=$landscape"
+            "帧 #$frameCount ${width}x$height 处理 ${costMs}ms fps=$currentFps" +
+                " 丢帧=$droppedFrames 横屏=$landscape"
         }
         if (detection != null) {
             DebugLog.logThrottled("scores", 2000L, "match") {
@@ -433,8 +526,7 @@ class CaptureService : Service() {
         }
 
         val stateChanged = detection != null && detection.stateLabel != lastStateLabel
-        val freezeChanged = freeze.frozen != lastFrozen || freeze.reason != lastFrozenReason
-        if (!stateChanged && !freezeChanged && nowElapsed - lastStatusAt < STATUS_MIN_INTERVAL_MS) return
+        if (!stateChanged && nowElapsed - lastStatusAt < STATUS_MIN_INTERVAL_MS) return
         lastStatusAt = nowElapsed
 
         val scores = detection?.let { d ->
@@ -453,9 +545,6 @@ class CaptureService : Service() {
                     fps = currentFps,
                     frames = frameCount,
                     lastFrameAtMs = nowElapsed,
-                    frozen = freeze.frozen,
-                    frozenReason = freeze.reason,
-                    frozenForMs = freeze.frozenForMs,
                     error = null
                 ),
                 match = if (detection != null) {
@@ -477,21 +566,7 @@ class CaptureService : Service() {
                 threshold = detection?.threshold ?: status.threshold
             )
         }
-        lastFrozen = freeze.frozen
-        lastFrozenReason = freeze.reason
         if (detection != null) lastStateLabel = detection.stateLabel
-    }
-
-    private fun maybePublishFreeze(state: FreezeDetector.State) {
-        if (state.frozen == lastFrozen && state.reason == lastFrozenReason) return
-        DebugLog.logThrottled("freeze", 3000L, "capture") {
-            "画面状态变化：frozen=${state.frozen} reason=${state.reason} ${state.frozenForMs / 1000}s"
-        }
-        lastFrozen = state.frozen
-        lastFrozenReason = state.reason
-        StatusHub.updateCapture {
-            it.copy(frozen = state.frozen, frozenReason = state.reason, frozenForMs = state.frozenForMs)
-        }
     }
 
     // ---------- 生命周期 ----------
@@ -511,9 +586,11 @@ class CaptureService : Service() {
     }
 
     private fun stopCapture() {
+        // onDestroy 与录屏回调都会走到这里，必须幂等。
+        if (stopped) return
+        stopped = true
         engine.stop()
         StatusHub.setRunning(false)
-        workerHandler?.removeCallbacks(watchdog)
         mainHandler.removeCallbacks(delayedRebuild)
         overlay?.detach()
         overlay = null

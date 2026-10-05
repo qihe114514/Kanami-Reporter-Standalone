@@ -36,14 +36,21 @@ class OverlayController(private val service: Service, private val settings: Sett
 
     val isAttached: Boolean get() = attached
 
+    /** 最近一次 [attach] 没能显示悬浮窗的原因（成功时为 null），由采集服务转述到界面上。 */
+    var lastError: String? = null
+        private set
+
     /** 按设置与权限添加窗口。返回是否真的显示了悬浮窗。 */
     fun attach(): Boolean {
+        lastError = null
         if (attached) return true
         if (!settings.showOverlay) {
+            lastError = "设置里关掉了悬浮窗"
             DebugLog.log("overlay", "设置里关闭了悬浮窗")
             return false
         }
         if (!hub.overlayGranted()) {
+            lastError = "没有悬浮窗权限"
             DebugLog.log("overlay", "没有悬浮窗权限，跳过显示")
             return false
         }
@@ -66,6 +73,7 @@ class OverlayController(private val service: Service, private val settings: Sett
         try {
             windowManager.addView(main, mainLp)
         } catch (e: Exception) {
+            lastError = "添加悬浮窗被系统拒绝（${e.javaClass.simpleName}）"
             DebugLog.log("overlay", "添加主悬浮窗失败：$e")
             return false
         }
@@ -236,6 +244,13 @@ class OverlayController(private val service: Service, private val settings: Sett
 
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     if (moved) {
+                        // 松手时拉回屏幕内：不这么做会把窗口停在负坐标，一半飘在屏幕外
+                        val metrics = service.resources.displayMetrics
+                        val maxX = (metrics.widthPixels - v.width).coerceAtLeast(0)
+                        val maxY = (metrics.heightPixels - v.height).coerceAtLeast(0)
+                        params.x = params.x.coerceIn(0, maxX)
+                        params.y = params.y.coerceIn(0, maxY)
+                        runCatching { windowManager.updateViewLayout(v, params) }
                         persist(params)
                         DebugLog.logThrottled("overlay-move", 1000L, "overlay") {
                             "悬浮窗位置 (${params.x}, ${params.y})"

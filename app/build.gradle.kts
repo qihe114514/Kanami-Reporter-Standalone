@@ -21,8 +21,8 @@ android {
         applicationId = "com.kanami.reporter"
         minSdk = 29
         targetSdk = 36
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 3
+        versionName = "1.2.0"
     }
 
     signingConfigs {
@@ -71,6 +71,7 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.compose.ui)
+    implementation(libs.compose.animation)
     implementation(libs.compose.foundation)
     implementation(libs.compose.ui.graphics)
     implementation(libs.backdrop)

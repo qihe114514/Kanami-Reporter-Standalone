@@ -38,10 +38,6 @@ data class CaptureInfo(
     val fps: Int = 0,
     val frames: Long = 0,
     val lastFrameAtMs: Long = 0,
-    val frozen: Boolean = false,
-    /** "no_change" 画面静止 / "no_frames" 采集停摆 */
-    val frozenReason: String? = null,
-    val frozenForMs: Long = 0,
     val error: String? = null
 )
 
@@ -54,13 +50,12 @@ data class RecognitionStatus(
     val events: List<EventRecord> = emptyList(),
     val foregroundPackage: String? = null,
     val voicePlaying: String? = null,
-    /** 最近一次「保存帧」等操作的结果提示。 */
+    /** 最近一次操作/启动链路的结果提示。 */
     val notice: String? = null,
+    /** [notice] 是否属于失败信息（界面据此用警示色）。 */
+    val noticeIsError: Boolean = false,
     val updatedAtMs: Long = 0
-) {
-    /** 画面是否卡住（用于悬浮窗与界面提示）。 */
-    val screenStalled: Boolean get() = capture.frozen
-}
+)
 
 /**
  * 进程内状态总线：采集服务写、界面/悬浮窗读。取代原来的 RecognitionBus。
@@ -114,8 +109,8 @@ object StatusHub {
     fun setVoicePlaying(label: String?) =
         update { it.copy(voicePlaying = label) }
 
-    fun setNotice(notice: String?) =
-        update { it.copy(notice = notice) }
+    fun setNotice(notice: String?, error: Boolean = false) =
+        update { it.copy(notice = notice, noticeIsError = notice != null && error) }
 
     fun pushEvent(id: String, label: String) {
         update {

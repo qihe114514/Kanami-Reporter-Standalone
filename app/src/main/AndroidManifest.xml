@@ -4,6 +4,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 「关于」里的检查更新 -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <!-- 游戏内实时状态悬浮窗 -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <!-- 后台驻留：避免游戏中被系统清理（被杀后必须重新授权录屏） -->
@@ -17,10 +19,13 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.KanamiReporter">
 
+        <!-- 应用只做竖屏：识别针对的是游戏（横屏），本界面本身不需要跟着系统转。
+             锁竖屏也顺带避免了采集几何跟着 App 自身朝向反复重建。 -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
+            android:screenOrientation="portrait"
             android:theme="@style/Theme.KanamiReporter">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
