@@ -12,3 +12,8 @@ keystore/
 !keystore/README.txt
 # debug 包 29MB，不入库（磁盘上仍保留在 releases/ 供实机排查）
 releases/*-debug.apk
+
+# python 缓存
+tools/verification/__pycache__/
+__pycache__/
+*.pyc
