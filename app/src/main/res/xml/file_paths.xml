@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 交给系统安装器的更新包路径（UpdateInstaller 下载到 cacheDir/update/） -->
+<paths>
+    <cache-path name="update" path="update/" />
+</paths>

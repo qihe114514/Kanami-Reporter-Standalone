@@ -200,7 +200,10 @@ fun SettingsPage(
 
                 Spacer(Modifier.height(14.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    GlassChip("检查更新", { checkUpdate(context) { message = it } }, backdrop)
+                    GlassChip("检查更新", {
+                        message = "正在检查…"
+                        checkUpdate(context) { _, text -> message = text }
+                    }, backdrop)
                     GlassChip("官网", { openUrl(context, HOME_URL) }, backdrop)
                     GlassChip("GitHub", { openUrl(context, GITHUB_URL) }, backdrop)
                 }
@@ -226,15 +229,7 @@ fun SettingsPage(
 internal fun appVersion(context: Context): String = runCatching {
     context.packageManager.getPackageInfo(context.packageName, 0).versionName
 }.getOrNull() ?: "?"
-
-internal fun openUrl(context: Context, url: String) {
-    runCatching {
-        context.startActivity(
-            Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        )
-    }
-}
+// 注：openUrl 在 UpdateCheck.kt 里（检查更新、跳发布页共用）。
 
 /** 调试模式卡片：日志路径/大小、常用操作、日志尾部查看。 */
 @Composable

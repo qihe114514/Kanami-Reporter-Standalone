@@ -37,12 +37,16 @@ class KanamiApp : Application() {
         maybeCheckUpdates()
     }
 
-    /** 启动时后台看一眼有没有新版本（桌面端也是每次启动自动检查）。失败静默，只写日志。 */
+    /**
+     * 启动时后台看一眼有没有新版本（桌面端也是每次启动自动检查）。
+     * 有新版就记进 [UpdateHolder]，运行页会把「开始识别」换成更新入口；
+     * 失败静默，只写日志 —— 没网不该打扰用户。
+     */
     private fun maybeCheckUpdates() {
         if (!settings.autoCheckUpdates) return
-        checkUpdate(this) { message ->
+        checkUpdate(this) { info, message ->
             DebugLog.log("update", "启动检查更新：$message")
-            if (message.startsWith("发现新版本")) StatusHub.setNotice(message)
+            if (info != null) StatusHub.setNotice(message)
         }
     }
 

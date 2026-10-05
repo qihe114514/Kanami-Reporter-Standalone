@@ -109,8 +109,10 @@ fun ControlCard(
     status: RecognitionStatus,
     templateCount: Int,
     backdrop: Backdrop,
+    update: UpdateInfo?,
     onStart: () -> Unit,
-    onStop: () -> Unit
+    onStop: () -> Unit,
+    onUpdate: () -> Unit
 ) {
     GlassCard(backdrop = backdrop) {
         Column(Modifier.padding(20.dp)) {
@@ -167,14 +169,30 @@ fun ControlCard(
             }
 
             Spacer(Modifier.height(18.dp))
+            // 发现有新版本时，"开始识别"这个位置直接换成更新入口 ——
+            // 旧版本继续用没有意义，先更新。正在识别时仍以停止为重，不然用户退不出来。
             LiquidButton(
-                onClick = { if (status.running) onStop() else onStart() },
+                onClick = {
+                    when {
+                        status.running -> onStop()
+                        update != null -> onUpdate()
+                        else -> onStart()
+                    }
+                },
                 backdrop = backdrop,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(
-                    if (status.running) "停止识别" else "开始识别",
-                    color = if (status.running) Color(0xFFFFD9D9) else StatusColors.text,
+                    when {
+                        status.running -> "停止识别"
+                        update != null -> "更新到 v${update.latestVersion}"
+                        else -> "开始识别"
+                    },
+                    color = when {
+                        status.running -> Color(0xFFFFD9D9)
+                        update != null -> Color(0xFFBFE0FF)
+                        else -> StatusColors.text
+                    },
                     fontSize = 16.sp
                 )
             }

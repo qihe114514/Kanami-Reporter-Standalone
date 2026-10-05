@@ -6,6 +6,8 @@ import android.content.Intent
 import android.graphics.BitmapFactory
 import android.media.projection.MediaProjectionManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -34,7 +36,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -61,7 +65,16 @@ import com.kanami.reporter.ui.ProgressiveBlurEdge
 import com.kanami.reporter.ui.ScoreListCard
 import com.kanami.reporter.ui.StatusColors
 import com.kanami.reporter.ui.Text
+import com.kanami.reporter.ui.UpdateDialog
+import com.kanami.reporter.ui.UpdateDialogState
+import com.kanami.reporter.ui.UpdateHolder
+import com.kanami.reporter.ui.appVersion
+import com.kanami.reporter.ui.canInstallPackages
+import com.kanami.reporter.ui.downloadUpdateApk
+import com.kanami.reporter.ui.installDownloadedApk
+import com.kanami.reporter.ui.openUrl
 import com.kanami.reporter.ui.rememberHapticTick
+import com.kanami.reporter.ui.requestInstallPermission
 import com.kanami.reporter.ui.liquid.LiquidBottomTab
 import com.kanami.reporter.ui.liquid.LiquidBottomTabs
 import com.kanami.reporter.ui.liquid.LiquidButton
@@ -70,6 +83,9 @@ import com.kanami.reporter.ui.liquid.TabIconKind
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberCombinedBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
 
@@ -136,6 +152,13 @@ class MainActivity : ComponentActivity() {
         val systemBars = WindowInsets.systemBars.asPaddingValues()
         val statusBarHeight = systemBars.calculateTopPadding()
         val navigationBarHeight = systemBars.calculateBottomPadding()
+
+        // 更新：发现有新版就把运行页的主按钮换成更新入口，点了弹液态玻璃弹窗
+        val updateInfo = UpdateHolder.info
+        var showUpdateDialog by remember { mutableStateOf(false) }
+        var updateState by remember { mutableStateOf(UpdateDialogState()) }
+        val updateScope = rememberCoroutineScope()
+        val uiHandler = remember { Handler(Looper.getMainLooper()) }
         // 标题条 / 底栏各自占的高度（含它们自己的内边距）。用固定值而不是实测：
         // 实测要等首帧，会让内容先闪一下再归位。
         val titleBarHeight = statusBarHeight + 64.dp
@@ -162,15 +185,17 @@ class MainActivity : ComponentActivity() {
                     label = "tab-content"
                 ) { current ->
                     if (current == 0) {
-                        RunPage(
-                            context = context,
-                            settings = settings,
-                            engine = engine,
-                            hub = hub,
-                            backdrop = backdrop,
-                            resumeTick = resumeTick,
-                            status = status
-                        )
+                            RunPage(
+                                context = context,
+                                settings = settings,
+                                engine = engine,
+                                hub = hub,
+                                backdrop = backdrop,
+                                resumeTick = resumeTick,
+                                status = status,
+                                update = updateInfo,
+                                onUpdate = { showUpdateDialog = true }
+                            )
                     } else {
                         com.kanami.reporter.ui.SettingsPage(
                             context = context,
@@ -232,6 +257,58 @@ class MainActivity : ComponentActivity() {
                     tab = tab,
                     onSelect = { tab = it },
                     backdrop = backdrop
+                )
+            }
+
+            val pending = updateInfo
+            if (showUpdateDialog && pending != null) {
+                UpdateDialog(
+                    backdrop = backdrop,
+                    info = pending,
+                    currentVersion = appVersion(context),
+                    state = updateState,
+                    onDismiss = { showUpdateDialog = false },
+                    onOpenReleasePage = {
+                        openUrl(context, pending.releasePageUrl)
+                        showUpdateDialog = false
+                    },
+                    onDownloadAndInstall = {
+                        // 要求：**先**申请安装权限再开始下载，而不是下载完才发现没权限
+                        if (!canInstallPackages(context)) {
+                            updateState = UpdateDialogState(
+                                message = "请先允许本应用安装应用，授权后回来再点一次「下载并安装」"
+                            )
+                            requestInstallPermission(context)
+                        } else {
+                            updateState = UpdateDialogState(downloading = true, progress = -1)
+                            updateScope.launch {
+                                val result = withContext(Dispatchers.IO) {
+                                    runCatching {
+                                        downloadUpdateApk(context, pending.apkUrl) { percent ->
+                                            uiHandler.post {
+                                                updateState = updateState.copy(progress = percent)
+                                            }
+                                        }
+                                    }
+                                }
+                                result
+                                    .onSuccess { apk ->
+                                        updateState = UpdateDialogState(message = "下载完成，正在拉起安装器…")
+                                        runCatching { installDownloadedApk(context, apk) }
+                                            .onFailure {
+                                                updateState = UpdateDialogState(
+                                                    message = "拉起安装器失败：${it.message ?: it.javaClass.simpleName}"
+                                                )
+                                            }
+                                    }
+                                    .onFailure {
+                                        updateState = UpdateDialogState(
+                                            message = "下载失败：${it.message ?: it.javaClass.simpleName}（所有通道都不通）"
+                                        )
+                                    }
+                            }
+                        }
+                    }
                 )
             }
         }
@@ -340,7 +417,9 @@ class MainActivity : ComponentActivity() {
         hub: PermissionHub,
         backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
         resumeTick: Int,
-        status: com.kanami.reporter.status.RecognitionStatus
+        status: com.kanami.reporter.status.RecognitionStatus,
+        update: com.kanami.reporter.ui.UpdateInfo?,
+        onUpdate: () -> Unit
     ) {
         val projectionLauncher = rememberLauncherForActivityResult(
             ActivityResultContracts.StartActivityForResult()
@@ -377,6 +456,8 @@ class MainActivity : ComponentActivity() {
                 status = status,
                 templateCount = engine.loadedTemplateCount,
                 backdrop = backdrop,
+                update = update,
+                onUpdate = onUpdate,
                 onStart = {
                     haptic()
                     StatusHub.setNotice("正在请求录屏授权…")
