@@ -11,9 +11,16 @@ object ReporterStates {
     const val FrameHeight = 1080
     const val DefaultThreshold = 0.90
 
-    /** 阵营辅助模板的判定阈值余量（与 PC 端 RecognitionEngine 一致）。 */
-    const val SideThresholdMargin = 0.05
-    const val SideThresholdFloor = 0.80
+    /**
+     * 阵营副标题（购买横幅的「攻方：安放炸弹 / 守方：歼灭敌军」）模板的命中下限。
+     *
+     * 这两个模板的 ROI 里混着半透明横幅的背景，背景透出场景，分数会随场景亮度整体漂移
+     * （同一台机器上亮天光场景 1.000、暗场景 0.78），所以不能沿用状态模板那套 0.90 阈值。
+     * 实测（2026-10-06 录屏 979 帧全量扫描）：横幅不可见时两侧最高 0.44，可见时正确一侧
+     * 0.69~0.80、错误一侧 ≤0.54，分离度很清楚。这里只设一个宽松下限，胜负交给
+     * [ReporterStateMachine.SideScoreMargin] 做相对比较。
+     */
+    const val SideTemplateFloor = 0.60
 
     const val AttackerSideTemplateName = "side_attacker"
     const val DefenderSideTemplateName = "side_defender"
@@ -69,7 +76,7 @@ enum class StateId(val id: Int) {
     }
 }
 
-/** KRT v1 模板：32 字节头 + ROI + 灰度像素。ROI 为 1920×1080 顶对齐归一化坐标。 */
+/** KRT v1 模板：32 字节头 + ROI + 灰度像素。ROI 为 1920×1080 归一化画布坐标（水平居中、顶对齐）。 */
 class TemplateModel(
     val name: String,
     val roiX: Int,
@@ -146,10 +153,19 @@ object KrtTemplateStore {
 }
 
 /**
- * 帧归一化（手机模式）：任意采集帧按宽度缩放到 1920，顶对齐贴入 1080 高的画布。
+ * 帧归一化（手机模式）：任意采集帧按**屏幕高度**等比缩放，水平居中、顶对齐贴入 1920×1080 画布。
  *
- * 手机端 HUD 按宽度等比渲染并锚定屏幕顶部，顶对齐保证不同全面屏比例下
- * HUD 落在同一组归一化坐标上（详见 docs/mobile-adaptation.md 第 2 节）。
+ * 实测依据（2026-10-06 第二台实机录屏 2376×1080 / 22:9，与参考机 2772×1280 / 19.5:9 同一游戏对比）：
+ * 游戏 HUD 的屏幕坐标只随屏幕**高度**等比变化，与宽度、宽高比无关 —— 同一个元素在两台机器上的
+ * 屏幕 y 之比恰为 1080/1280，屏幕 x 到屏幕中心的距离之比也是 1080/1280。因此归一化的不变量
+ * 必须是内容高度而不是内容宽度。旧实现按宽度缩放到 1920，宽高比一变 HUD 就在归一化坐标里被
+ * 纵向压扁（19.5:9 → 22:9 压 1.6%）：计时数字、炸弹面板这类小模板误差不到 1px，仍能命中；
+ * 宽文字横幅整体掉到 0.09~0.70，阈值 0.90 下完全不命中 —— 购买阶段、回合获胜/战败、
+ * 选人画面、对局结算全部失效。
+ *
+ * 内容高度取参考机 2772×1280 在"按宽度归一化"下的内容高度 1280×1920/2772 ≈ 886.58 → 887，
+ * 于是参考机上的结果与旧实现逐像素一致，既有模板无需重切。水平按屏幕中心对齐（模板覆盖的
+ * HUD 元素都是居中锚定的）；比参考机更宽或更窄的屏幕在两侧补黑边。
  *
  * 灰度公式与 PC 端 FrameProcessing.ToGrayscale 完全一致：
  * gray = (29*B + 150*G + 77*R) >> 8（输入 RGBA）。
@@ -158,25 +174,35 @@ object FrameProcessing {
     /** 比分数字二值化阈值（实机帧统计得到：数字为亮白 200+，底板/背景远低于此）。 */
     const val BinaryThreshold = 165
 
+    /** 归一化内容高度：与采集机宽高比无关的常量（1280×1920/2772 四舍五入）。 */
+    const val ContentHeight = 887
+
+    /** HUD 缩放基准（参考机内容高度，保留小数以免逐行累积偏移）。 */
+    private const val ReferenceContentHeight = 1920.0 * 1280.0 / 2772.0
+
     class NormalizedFrame(
         var gray: ByteArray,
         var contentHeight: Int
     )
 
-    private val scale = ReporterStates.FrameWidth.toDouble()
-
     fun normalize(rgba: ByteArray, srcWidth: Int, srcHeight: Int, out: NormalizedFrame): NormalizedFrame {
         val outW = ReporterStates.FrameWidth
-        val outH = Math.round(srcHeight * scale / srcWidth).toInt().coerceAtMost(ReporterStates.FrameHeight)
+        val outH = ContentHeight
         if (out.gray.size < outW * ReporterStates.FrameHeight) {
             out.gray = ByteArray(outW * ReporterStates.FrameHeight)
         }
         out.gray.fill(0)
 
-        val stepX = srcWidth.toDouble() / outW
+        // 源像素 / 归一化像素：由屏幕高度决定，与宽度无关。
+        val step = srcHeight.toDouble() / ReferenceContentHeight
+        // 归一化坐标 → 源坐标：srcX = x * step + xBias（水平居中）、srcY = (y + 0.5) * step - 0.5。
+        val xBias = (0.5 - outW * 0.5) * step + srcWidth * 0.5 - 0.5
+        // 先把落在画面内的 x 范围算出来，内层循环就不用逐像素判边界了。
+        val xFirst = Math.ceil(-xBias / step).toInt().coerceIn(0, outW)
+        val xLast = Math.floor((srcWidth - 1.0 - xBias) / step).toInt().coerceIn(-1, outW - 1)
         var y = 0
         while (y < outH) {
-            val sy = ((y + 0.5) * stepX - 0.5).coerceIn(0.0, (srcHeight - 1).toDouble())
+            val sy = ((y + 0.5) * step - 0.5).coerceIn(0.0, (srcHeight - 1).toDouble())
             val y0f = Math.floor(sy)
             val y0 = y0f.toInt().coerceIn(0, srcHeight - 1)
             val y1 = (y0 + 1).coerceAtMost(srcHeight - 1)
@@ -184,11 +210,11 @@ object FrameProcessing {
             val row0 = y0 * srcWidth
             val row1 = y1 * srcWidth
             val outRow = y * outW
-            var x = 0
-            var srcX = 0.5 * stepX - 0.5
-            while (x < outW) {
+            var x = xFirst
+            while (x <= xLast) {
+                val srcX = x * step + xBias
                 val xf = Math.floor(srcX)
-                val xs = xf.toInt().coerceIn(0, srcWidth - 1)
+                val xs = xf.toInt()
                 val xs1 = (xs + 1).coerceAtMost(srcWidth - 1)
                 val fx = srcX - xf
                 val gx = 1.0 - fx
@@ -208,7 +234,6 @@ object FrameProcessing {
                 val b = bTop * gy + bBot * fy
                 out.gray[outRow + x] = (((29.0 * b + 150.0 * g + 77.0 * r) / 256.0).toInt().coerceIn(0, 255)).toByte()
                 x++
-                srcX += stepX
             }
             y++
         }

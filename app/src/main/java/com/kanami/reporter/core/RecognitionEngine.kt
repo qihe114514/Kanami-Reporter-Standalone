@@ -236,13 +236,11 @@ class RecognitionEngine(private val context: Context) {
         val attacker = sideModels[0]
         val defender = sideModels[1]
         if (attacker == null && defender == null) return null
-        val sideThreshold = (threshold - ReporterStates.SideThresholdMargin)
-            .coerceIn(ReporterStates.SideThresholdFloor, 1.0)
         val attackerScore = if (attacker != null) FrameProcessing.score(attacker, gray) else -1.0
         val defenderScore = if (defender != null) FrameProcessing.score(defender, gray) else -1.0
         return ReporterStateMachine.SideSignal(
-            attackerScore >= sideThreshold,
-            defenderScore >= sideThreshold,
+            attackerScore >= ReporterStates.SideTemplateFloor,
+            defenderScore >= ReporterStates.SideTemplateFloor,
             attackerScore,
             defenderScore
         )

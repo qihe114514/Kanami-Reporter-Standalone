@@ -20,7 +20,12 @@ class ReporterStateMachine {
         const val BombPlantedDurationSeconds = 45
         const val RoundIngameWarningSeconds40 = 40
         const val RoundIngameWarningSeconds20 = 20
-        const val SideScoreMargin = 0.03
+        /**
+         * 阵营判定的领先幅度：两侧都过 [ReporterStates.SideTemplateFloor] 时，只有一侧领先
+         * 这么多才改阵营。阵营副标题模板混着半透明横幅背景，分数会随场景漂移；实测正确/错误
+         * 两侧相差 0.15 以上，横幅不可见时两侧又都低于下限，所以判定很干净。
+         */
+        const val SideScoreMargin = 0.08
 
         // 回合准备阶段时长（秒）：沿用 PC 端实测值。
         // 手机端竞技爆破为「先胜 7 回合」赛制：6 回合上半场 + 6 回合下半场（录屏实证：
